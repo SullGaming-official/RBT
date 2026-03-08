@@ -21,17 +21,6 @@ top:0;
 left:0;
 }
 
-#debug{
-position:fixed;
-bottom:20px;
-left:20px;
-color:white;
-font-family:Arial,sans-serif;
-font-size:18px;
-text-shadow:0 0 5px black;
-pointer-events:none;
-}
-
 #playButton{
 position:fixed;
 top:50%;
@@ -54,7 +43,6 @@ user-select:none;
 
 <div id="playButton">▶ Play</div>
 <canvas id="world"></canvas>
-<div id="debug">Reality Breaker ON</div>
 
 <script src="https://unpkg.com/matter-js@0.20.0/build/matter.min.js"></script>
 
@@ -75,7 +63,6 @@ Events
 } = Matter;
 
 const canvas = document.getElementById('world');
-const debug = document.getElementById('debug');
 
 function resizeCanvas(){
 canvas.width = window.innerWidth;
@@ -170,7 +157,6 @@ if(gravityEnabled){
 
 engine.gravity.x = 0;
 engine.gravity.y = 1;
-debug.textContent="Gravity: ON";
 
 }else{
 
@@ -181,8 +167,6 @@ Body.applyForce(box,box.position,{
 x:(Math.random()-0.5)*0.002,
 y:-0.01
 });
-
-debug.textContent="Gravity: OFF";
 
 }
 
@@ -249,12 +233,6 @@ render:{visible:false}
 World.add(engine.world,mouseConstraint);
 
 let lastMousePos = {x:0,y:0};
-let interactive = false;
-
-const INTERACT_RADIUS = 180;
-const EXIT_RADIUS = 220;
-const SPEED_THRESHOLD = 8;
-const PUNCH_FORCE = 0.005;
 
 canvas.addEventListener('mousemove',(e)=>{
 
@@ -272,23 +250,11 @@ const distY = mousePos.y-box.position.y;
 
 const dist = Math.sqrt(distX*distX+distY*distY);
 
-if(!interactive && dist < INTERACT_RADIUS){
-
-interactive = true;
-debug.textContent = 'Near block: drag it or smack it';
-
-}else if(interactive && dist > EXIT_RADIUS){
-
-interactive = false;
-debug.textContent = 'Reality Breaker ON';
-
-}
-
-if(dist < INTERACT_RADIUS && speed > SPEED_THRESHOLD){
+if(dist < 180 && speed > 8){
 
 Body.applyForce(box,box.position,{
-x:dx*PUNCH_FORCE,
-y:dy*PUNCH_FORCE
+x:dx*0.005,
+y:dy*0.005
 });
 
 }
@@ -324,10 +290,8 @@ if(typeof DeviceMotionEvent !== "undefined" &&
 typeof DeviceMotionEvent.requestPermission === "function"){
 
 try{
-
 const permission = await DeviceMotionEvent.requestPermission();
 if(permission !== "granted") return;
-
 }catch{}
 
 }
@@ -358,21 +322,18 @@ if(!acc) return;
 const ax = acc.x || 0;
 const ay = acc.y || 0;
 
-const strength = Math.abs(ax)+Math.abs(ay);
+const strength = Math.abs(ax) + Math.abs(ay);
 
-if(strength > 25){
+if(strength > 10){
 
 const now = Date.now();
 
-if(now-lastShake > 200){
+if(now - lastShake > 80){
 
 Body.applyForce(box,box.position,{
-x:ax*0.002,
-y:-ay*0.002
+x: ax * 0.006,
+y: -ay * 0.006
 });
-
-debug.textContent =
-"Shake X:"+ax.toFixed(1)+" Y:"+ay.toFixed(1);
 
 lastShake = now;
 
