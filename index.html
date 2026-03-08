@@ -5,118 +5,91 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <title>RealityBreaker</title>
   <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-      background: transparent;
-      -webkit-user-select: none;
-      user-select: none;
-      touch-action: none;
-      overflow: hidden;
-      font-family: Arial, sans-serif;
+    html,body{
+      margin:0;
+      padding:0;
+      height:100%;
+      background:transparent;
+      -webkit-user-select:none;
+      user-select:none;
+      touch-action:none;
+      overflow:hidden;
+      font-family:Arial, sans-serif;
     }
 
-    .portrait-wrapper {
-      position: fixed;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: transparent;
-      overflow: hidden;
-      pointer-events: auto;
+    #world{
+      position:absolute;
+      top:0;
+      left:0;
+      display:block;
+      background:transparent;
+      touch-action:none;
     }
 
-    #content {
-      position: relative;
-      width: 100%;
-      height: 100%;
-      transform-origin: 50% 50%;
-      will-change: transform;
-      touch-action: none;
+    #debug{
+      position:fixed;
+      bottom:20px;
+      left:20px;
+      color:white;
+      font-size:18px;
+      text-shadow:0 0 5px black;
+      pointer-events:none;
+      z-index:9998;
     }
 
-    .rotate-to-portrait #content { }
-    .rotate-180 #content { }
-
-    #world {
-      position: absolute;
-      top: 0;
-      left: 0;
-      display: block;
-      background: transparent;
-      touch-action: none;
-      -webkit-user-select: none;
-      user-select: none;
+    #playButton{
+      position:fixed;
+      top:50%;
+      left:50%;
+      transform:translate(-50%,-50%);
+      padding:20px 40px;
+      background:rgba(0,0,0,0.75);
+      color:white;
+      font-size:32px;
+      border-radius:12px;
+      cursor:pointer;
+      z-index:9999;
+      user-select:none;
+      touch-action:manipulation;
     }
-
-    #playButton {
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      padding: 20px 40px;
-      background: rgba(0,0,0,0.75);
-      color: white;
-      font-size: 32px;
-      border-radius: 12px;
-      cursor: pointer;
-      z-index: 9999;
-      user-select: none;
-      touch-action: manipulation;
-    }
-
-    .rotate-to-portrait #playButton { transform: rotate(90deg) translate(-50%, -50%); transform-origin: center; }
-    .rotate-180 #playButton { transform: rotate(180deg) translate(-50%, -50%); transform-origin: center; }
   </style>
 </head>
 <body>
-  <div id="portraitWrapper" class="portrait-wrapper">
-    <div id="content">
-      <div id="playButton">▶ Play</div>
-      <canvas id="world"></canvas>
-    </div>
-  </div>
+  <div id="playButton">▶ Play</div>
+  <canvas id="world"></canvas>
+  <div id="debug">Reality Breaker ON</div>
 
   <script src="https://unpkg.com/matter-js@0.20.0/build/matter.min.js"></script>
-
   <script>
-  /*
-    RealityBreaker
-    - On PC: no tilt, mouse behaves like mobile touch (pick up, drag, throw, bounce-back)
-    - On mobile: touch drag/throw works as before, tilt enabled only on mobile
-    - Portrait lock attempt + rotation fallback
-    - Pointer coordinate mapping handles transforms
+  /* RealityBreaker
+     - Works on mobile and PC
+     - No tilt on PC; tilt enabled only on mobile
+     - Picking up & holding (mouse or touch) behaves like the simple example:
+       while held the box follows the pointer; on release it receives a throw velocity
+       and on strong throws it bounces back slightly
+     - Double-tap (touch) or right-click toggles gravity
   */
 
   const playButton = document.getElementById('playButton');
-  const wrapper = document.getElementById('portraitWrapper');
-  const content = document.getElementById('content');
   const canvas = document.getElementById('world');
+  const debug = document.getElementById('debug');
 
   const { Engine, Render, World, Bodies, Runner, Mouse, MouseConstraint, Body, Events } = Matter;
 
-  // Detect mobile vs PC
+  // detect mobile
   const isMobile = /Mobi|Android|iPhone|iPad|iPod|Tablet/i.test(navigator.userAgent) || ('ontouchstart' in window && navigator.maxTouchPoints > 0);
-  const isPC = !isMobile;
 
-  // Logical canvas size (portrait-oriented)
-  let logicalWidth = window.innerWidth;
-  let logicalHeight = window.innerHeight;
-
-  function setCanvasSize(w, h) {
-    logicalWidth = Math.round(w);
-    logicalHeight = Math.round(h);
-    const ratio = window.devicePixelRatio || 1;
-    canvas.width = Math.round(logicalWidth * ratio);
-    canvas.height = Math.round(logicalHeight * ratio);
-    canvas.style.width = logicalWidth + 'px';
-    canvas.style.height = logicalHeight + 'px';
+  // canvas sizing
+  function resizeCanvas(){
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    canvas.style.width = window.innerWidth + 'px';
+    canvas.style.height = window.innerHeight + 'px';
   }
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
 
-  setCanvasSize(logicalWidth, logicalHeight);
-
+  // engine + render
   const engine = Engine.create();
   engine.gravity.y = 1;
 
@@ -125,300 +98,84 @@
     engine: engine,
     options: {
       wireframes: false,
-      background: 'transparent',
-      width: logicalWidth,
-      height: logicalHeight,
-      pixelRatio: window.devicePixelRatio || 1
+      background: 'transparent'
     }
   });
 
+  // walls
   let ground, ceiling, leftWall, rightWall;
-  const boxSize = 120;
-  let box;
-
-  function createWalls() {
+  function createWalls(){
+    const w = window.innerWidth;
+    const h = window.innerHeight;
     if (ground) World.remove(engine.world, ground);
     if (ceiling) World.remove(engine.world, ceiling);
     if (leftWall) World.remove(engine.world, leftWall);
     if (rightWall) World.remove(engine.world, rightWall);
 
-    const w = logicalWidth;
-    const h = logicalHeight;
-
-    ground = Bodies.rectangle(w/2, h + 250, w + 500, 500, { isStatic: true, render: { visible: false } });
-    ceiling = Bodies.rectangle(w/2, -250, w + 500, 500, { isStatic: true, render: { visible: false } });
-    leftWall = Bodies.rectangle(-250, h/2, 500, h + 500, { isStatic: true, render: { visible: false } });
-    rightWall = Bodies.rectangle(w + 250, h/2, 500, h + 500, { isStatic: true, render: { visible: false } });
+    ground = Bodies.rectangle(w/2, h + 250, w + 500, 500, { isStatic:true, render:{visible:false} });
+    ceiling = Bodies.rectangle(w/2, -250, w + 500, 500, { isStatic:true, render:{visible:false} });
+    leftWall = Bodies.rectangle(-250, h/2, 500, h + 500, { isStatic:true, render:{visible:false} });
+    rightWall = Bodies.rectangle(w + 250, h/2, 500, h + 500, { isStatic:true, render:{visible:false} });
 
     World.add(engine.world, [ground, ceiling, leftWall, rightWall]);
   }
+  createWalls();
 
-  function createBox() {
-    if (box) World.remove(engine.world, box);
-    box = Bodies.rectangle(
-      logicalWidth / 2,
-      logicalHeight / 4,
-      boxSize,
-      boxSize,
-      { restitution: 0.8, frictionAir: 0.01, friction: 0.001, render: { fillStyle: '#0A013F' } }
-    );
-    World.add(engine.world, box);
-  }
+  // box
+  const boxSize = 120;
+  let box = Bodies.rectangle(window.innerWidth/2, window.innerHeight/4, boxSize, boxSize, {
+    restitution: 0.8,
+    frictionAir: 0.01,
+    friction: 0.001,
+    render: { fillStyle: '#0A013F' }
+  });
+  World.add(engine.world, box);
 
-  function keepBoxInside() {
-    const w = logicalWidth;
-    const h = logicalHeight;
-    const half = boxSize / 2;
+  function keepBoxInside(){
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const half = boxSize/2;
     let x = box.position.x;
     let y = box.position.y;
     if (x < half) x = half;
-    if (x > w - half) x = w - half;
+    if (x > w-half) x = w-half;
     if (y < half) y = half;
-    if (y > h - half) y = h - half;
+    if (y > h-half) y = h-half;
     Body.setPosition(box, { x, y });
-    Body.setVelocity(box, { x: 0, y: 0 });
+    Body.setVelocity(box, { x:0, y:0 });
   }
 
-  // Map client coordinates to canvas logical coordinates (handles transforms)
-  function clientToCanvas(clientX, clientY) {
-    const rect = canvas.getBoundingClientRect();
-    const x = (clientX - rect.left) * (logicalWidth / rect.width);
-    const y = (clientY - rect.top) * (logicalHeight / rect.height);
-    return { x, y };
-  }
-
-  // Read device orientation angle if available
-  function getDeviceAngle() {
-    if (screen.orientation && typeof screen.orientation.angle === 'number') return screen.orientation.angle;
-    if (typeof window.orientation === 'number') return window.orientation;
-    return 0;
-  }
-
-  // Rotation fallback and 180deg correction
-  function applyRotationFallback() {
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const angle = ((getDeviceAngle() % 360) + 360) % 360;
-
-    wrapper.classList.remove('rotate-to-portrait', 'rotate-180');
-
-    if (vw > vh) {
-      wrapper.classList.add('rotate-to-portrait');
-      const portraitW = vh;
-      const portraitH = vw;
-      const scaleX = vw / portraitW;
-      const scaleY = vh / portraitH;
-      const scale = Math.min(scaleX, scaleY);
-      content.style.transform = `rotate(-90deg) scale(${scale})`;
-      content.style.transformOrigin = '50% 50%';
-      setCanvasSize(portraitW, portraitH);
-      content.style.width = portraitW + 'px';
-      content.style.height = portraitH + 'px';
-    } else {
-      if (angle === 180) {
-        wrapper.classList.add('rotate-180');
-        content.style.transform = 'rotate(180deg)';
-        content.style.transformOrigin = '50% 50%';
-      } else {
-        content.style.transform = '';
-        content.style.width = '';
-        content.style.height = '';
-      }
-      setCanvasSize(window.innerWidth, window.innerHeight);
-    }
-
-    render.options.width = logicalWidth;
-    render.options.height = logicalHeight;
-    const ratio = window.devicePixelRatio || 1;
-    render.canvas.width = canvas.width;
-    render.canvas.height = canvas.height;
-    render.canvas.style.width = canvas.style.width;
-    render.canvas.style.height = canvas.style.height;
-    if (render.context && render.context.setTransform) render.context.setTransform(ratio, 0, 0, ratio, 0, 0);
-
+  window.addEventListener('resize', () => {
+    resizeCanvas();
     createWalls();
-    if (!box) createBox();
     keepBoxInside();
-  }
-
-  // Try to lock orientation to portrait-primary (prevents upside-down) when possible
-  async function enforcePortrait() {
-    try {
-      if (screen.orientation && screen.orientation.lock) {
-        await screen.orientation.lock('portrait-primary');
-        setCanvasSize(window.innerWidth, window.innerHeight);
-        render.options.width = logicalWidth;
-        render.options.height = logicalHeight;
-        const ratio = window.devicePixelRatio || 1;
-        render.canvas.width = canvas.width;
-        render.canvas.height = canvas.height;
-        render.canvas.style.width = canvas.style.width;
-        render.canvas.style.height = canvas.style.height;
-        if (render.context && render.context.setTransform) render.context.setTransform(ratio, 0, 0, ratio, 0, 0);
-        wrapper.classList.remove('rotate-to-portrait', 'rotate-180');
-        createWalls();
-        keepBoxInside();
-        return;
-      }
-    } catch (err) {
-      // ignore and fallback
-    }
-    applyRotationFallback();
-  }
-
-  // Initial world
-  applyRotationFallback();
-  createBox();
-
-  // Resize/orientation handlers
-  window.addEventListener('resize', () => setTimeout(applyRotationFallback, 30));
-  window.addEventListener('orientationchange', () => setTimeout(applyRotationFallback, 50));
-
-  // Gravity toggle
-  let gravityEnabled = true;
-  function toggleGravity() {
-    gravityEnabled = !gravityEnabled;
-    if (gravityEnabled) {
-      engine.gravity.x = 0;
-      engine.gravity.y = 1;
-    } else {
-      engine.gravity.x = 0;
-      engine.gravity.y = 0;
-      Body.applyForce(box, box.position, { x: (Math.random() - 0.5) * 0.002, y: -0.01 });
-    }
-  }
-
-  // --- Custom pickup/drag implementation (works with transforms and on PC/mobile) ---
-  let isDragging = false;
-  let dragPointerId = null;
-  let dragPointerType = null;
-  let dragOffset = { x: 0, y: 0 };
-  let lastDragPos = null;
-  let lastDragTime = 0;
-
-  function startDrag(pointerId, pointerType, clientX, clientY) {
-    const pos = clientToCanvas(clientX, clientY);
-    const dx = pos.x - box.position.x;
-    const dy = pos.y - box.position.y;
-    const dist = Math.sqrt(dx*dx + dy*dy);
-    if (dist <= boxSize * 0.7) {
-      isDragging = true;
-      dragPointerId = pointerId;
-      dragPointerType = pointerType;
-      dragOffset.x = pos.x - box.position.x;
-      dragOffset.y = pos.y - box.position.y;
-      lastDragPos = pos;
-      lastDragTime = performance.now();
-      Body.setVelocity(box, { x: 0, y: 0 });
-      return true;
-    }
-    return false;
-  }
-
-  function moveDrag(clientX, clientY) {
-    if (!isDragging) return;
-    const pos = clientToCanvas(clientX, clientY);
-    const targetX = pos.x - dragOffset.x;
-    const targetY = pos.y - dragOffset.y;
-    Body.setPosition(box, { x: targetX, y: targetY });
-    Body.setVelocity(box, { x: 0, y: 0 });
-    lastDragPos = pos;
-    lastDragTime = performance.now();
-  }
-
-  function endDrag(clientX, clientY) {
-    if (!isDragging) return;
-    const now = performance.now();
-    const pos = clientToCanvas(clientX, clientY);
-    const dt = Math.max(1, now - lastDragTime);
-    const vx = (pos.x - lastDragPos.x) / (dt / 1000); // px/s
-    const vy = (pos.y - lastDragPos.y) / (dt / 1000); // px/s
-
-    // Apply a scaled velocity to the body (throw)
-    const velocityScale = 0.02;
-    Body.setVelocity(box, { x: vx * velocityScale, y: vy * velocityScale });
-
-    // Bounce-back behavior: apply opposite impulse when thrown strongly
-    // Apply for both touch and mouse so PC behaves like mobile
-    const speed = Math.sqrt(vx*vx + vy*vy);
-    const throwThreshold = 200; // px/s threshold to consider it a throw
-    if (speed > throwThreshold) {
-      // Temporarily increase restitution for a visible bounce
-      const originalRest = box.restitution || 0.8;
-      box.restitution = Math.max(originalRest, 1.2);
-
-      // Apply a force opposite to the throw direction to push it back
-      const impulseScale = 0.0006; // tuned for feel
-      Body.applyForce(box, box.position, { x: -vx * impulseScale, y: -vy * impulseScale });
-
-      // Restore restitution after a short time
-      setTimeout(() => { box.restitution = originalRest; }, 300);
-    }
-
-    isDragging = false;
-    dragPointerId = null;
-    dragPointerType = null;
-    lastDragPos = null;
-  }
-
-  // Pointer events (works on PC and touch)
-  document.addEventListener('pointerdown', (e) => {
-    // allow left mouse button and touch/pen
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    const started = startDrag(e.pointerId, e.pointerType, e.clientX, e.clientY);
-    if (started) {
-      try { (e.target || document).setPointerCapture(e.pointerId); } catch (err) {}
-      e.preventDefault();
-    }
-  }, { passive: false });
-
-  document.addEventListener('pointermove', (e) => {
-    if (isDragging && e.pointerId === dragPointerId) {
-      moveDrag(e.clientX, e.clientY);
-      e.preventDefault();
-      return;
-    }
-
-    // Non-drag pointer movement: keep "smack" behavior for quick moves
-    const pos = clientToCanvas(e.clientX, e.clientY);
-    if (!window._rb_lastMousePos) window._rb_lastMousePos = { x: pos.x, y: pos.y };
-    const dx = pos.x - window._rb_lastMousePos.x;
-    const dy = pos.y - window._rb_lastMousePos.y;
-    const speed = Math.sqrt(dx*dx + dy*dy);
-    window._rb_lastMousePos = pos;
-
-    const distX = pos.x - box.position.x;
-    const distY = pos.y - box.position.y;
-    const dist = Math.sqrt(distX*distX + distY*distY);
-
-    const INTERACT_RADIUS = 180;
-    const SPEED_THRESHOLD = 8;
-    const PUNCH_FORCE = 0.005;
-
-    if (dist < INTERACT_RADIUS && speed > SPEED_THRESHOLD) {
-      Body.applyForce(box, box.position, { x: dx * PUNCH_FORCE, y: dy * PUNCH_FORCE });
-    }
-  }, { passive: false });
-
-  document.addEventListener('pointerup', (e) => {
-    if (isDragging && e.pointerId === dragPointerId) {
-      endDrag(e.clientX, e.clientY);
-      try { (e.target || document).releasePointerCapture(e.pointerId); } catch (err) {}
-      e.preventDefault();
-    }
-  }, { passive: false });
-
-  document.addEventListener('pointercancel', (e) => {
-    if (isDragging && e.pointerId === dragPointerId) {
-      isDragging = false;
-      dragPointerId = null;
-      dragPointerType = null;
-      lastDragPos = null;
-      try { (e.target || document).releasePointerCapture(e.pointerId); } catch (err) {}
-    }
   });
 
-  // Keep a lightweight MouseConstraint for clicks/drags that happen directly on canvas
+  // gravity toggle
+  let gravityEnabled = true;
+  function toggleGravity(){
+    gravityEnabled = !gravityEnabled;
+    if (gravityEnabled){
+      engine.gravity.y = 1;
+      debug.textContent = "Gravity: ON";
+    } else {
+      engine.gravity.y = 0;
+      Body.applyForce(box, box.position, { x:(Math.random()-0.5)*0.002, y:-0.01 });
+      debug.textContent = "Gravity: OFF";
+    }
+    setTimeout(()=> debug.textContent = "Reality Breaker ON", 1200);
+  }
+
+  // pointer mapping (client -> canvas logical coords)
+  function clientToCanvas(clientX, clientY){
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (clientX - rect.left) * (canvas.width / rect.width),
+      y: (clientY - rect.top) * (canvas.height / rect.height)
+    };
+  }
+
+  // mouse constraint kept for clicks but we implement custom pickup to match simple example
   const mouse = Mouse.create(canvas);
   const mouseConstraint = MouseConstraint.create(engine, {
     mouse: mouse,
@@ -426,35 +183,196 @@
   });
   World.add(engine.world, mouseConstraint);
 
-  // Double-tap (touch) toggles gravity
+  // interactive "smack" feedback (like original)
+  let lastMousePos = { x:0, y:0 };
+  let interactive = false;
+  const INTERACT_RADIUS = 180;
+  const EXIT_RADIUS = 220;
+  const SPEED_THRESHOLD = 8;
+  const PUNCH_FORCE = 0.005;
+
+  // custom pickup/hold/throw behavior (works for mouse & touch)
+  let holding = false;
+  let holdPointerId = null;
+  let holdPointerType = null;
+  let holdOffset = { x:0, y:0 };
+  let lastHoldPos = null;
+  let lastHoldTime = 0;
+
+  function tryStartHold(pointerId, pointerType, clientX, clientY){
+    const pos = clientToCanvas(clientX, clientY);
+    // convert box position to canvas pixel coords (render uses canvas pixel size)
+    const boxCanvasPos = { x: box.position.x, y: box.position.y };
+    const dx = pos.x - boxCanvasPos.x;
+    const dy = pos.y - boxCanvasPos.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if (dist <= boxSize * 0.7){
+      holding = true;
+      holdPointerId = pointerId;
+      holdPointerType = pointerType;
+      holdOffset.x = pos.x - boxCanvasPos.x;
+      holdOffset.y = pos.y - boxCanvasPos.y;
+      lastHoldPos = pos;
+      lastHoldTime = performance.now();
+      // while holding, zero velocity so it follows exactly
+      Body.setVelocity(box, { x:0, y:0 });
+      // reduce gravity influence while holding
+      // keep engine.gravity as-is but we move the body directly
+      return true;
+    }
+    return false;
+  }
+
+  function moveHold(clientX, clientY){
+    if (!holding) return;
+    const pos = clientToCanvas(clientX, clientY);
+    const targetX = pos.x - holdOffset.x;
+    const targetY = pos.y - holdOffset.y;
+    // set position in world coordinates (canvas pixel coords match render)
+    Body.setPosition(box, { x: targetX, y: targetY });
+    Body.setVelocity(box, { x:0, y:0 });
+    lastHoldPos = pos;
+    lastHoldTime = performance.now();
+  }
+
+  function endHold(clientX, clientY){
+    if (!holding) return;
+    const now = performance.now();
+    const pos = clientToCanvas(clientX, clientY);
+    const dt = Math.max(1, now - lastHoldTime); // ms
+    const vx = (pos.x - lastHoldPos.x) / (dt / 1000); // px/s
+    const vy = (pos.y - lastHoldPos.y) / (dt / 1000); // px/s
+
+    // apply throw velocity scaled down to world units
+    const velocityScale = 0.02;
+    Body.setVelocity(box, { x: vx * velocityScale, y: vy * velocityScale });
+
+    // bounce-back on strong throws (same behavior on PC & mobile)
+    const speed = Math.sqrt(vx*vx + vy*vy);
+    const throwThreshold = 200; // px/s
+    if (speed > throwThreshold){
+      const originalRest = box.restitution || 0.8;
+      box.restitution = Math.max(originalRest, 1.2);
+      const impulseScale = 0.0006;
+      Body.applyForce(box, box.position, { x: -vx * impulseScale, y: -vy * impulseScale });
+      setTimeout(()=> { box.restitution = originalRest; }, 300);
+    }
+
+    holding = false;
+    holdPointerId = null;
+    holdPointerType = null;
+    lastHoldPos = null;
+  }
+
+  // pointer events: unify mouse & touch behavior
+  document.addEventListener('pointerdown', (e) => {
+    // only left mouse button
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+    // try to start hold; if started, capture pointer
+    const started = tryStartHold(e.pointerId, e.pointerType, e.clientX, e.clientY);
+    if (started){
+      try { (e.target || document).setPointerCapture(e.pointerId); } catch (err) {}
+      e.preventDefault();
+    }
+  }, { passive:false });
+
+  document.addEventListener('pointermove', (e) => {
+    // if holding with this pointer, move the box
+    if (holding && e.pointerId === holdPointerId){
+      moveHold(e.clientX, e.clientY);
+      e.preventDefault();
+      return;
+    }
+
+    // otherwise, update "smack" behavior (like original)
+    const mousePos = { x: e.clientX, y: e.clientY };
+    const dx = mousePos.x - lastMousePos.x;
+    const dy = mousePos.y - lastMousePos.y;
+    const speed = Math.sqrt(dx*dx + dy*dy);
+    lastMousePos = mousePos;
+
+    // compute distance in screen coords between pointer and box (box.position is in canvas pixels)
+    const rect = canvas.getBoundingClientRect();
+    const boxScreenX = box.position.x * (rect.width / canvas.width) + rect.left;
+    const boxScreenY = box.position.y * (rect.height / canvas.height) + rect.top;
+    const distX = e.clientX - boxScreenX;
+    const distY = e.clientY - boxScreenY;
+    const dist = Math.sqrt(distX*distX + distY*distY);
+
+    if (!interactive && dist < INTERACT_RADIUS) {
+      interactive = true;
+      debug.textContent = 'Near block: drag it or smack it';
+    } else if (interactive && dist > EXIT_RADIUS) {
+      interactive = false;
+      debug.textContent = 'Reality Breaker ON';
+    }
+
+    if (dist < INTERACT_RADIUS && speed > SPEED_THRESHOLD){
+      // apply small force based on screen movement; map to world by using same dx/dy scaled
+      Body.applyForce(box, box.position, { x: dx * PUNCH_FORCE, y: dy * PUNCH_FORCE });
+    }
+  }, { passive:false });
+
+  document.addEventListener('pointerup', (e) => {
+    if (holding && e.pointerId === holdPointerId){
+      endHold(e.clientX, e.clientY);
+      try { (e.target || document).releasePointerCapture(e.pointerId); } catch (err) {}
+      e.preventDefault();
+    }
+  }, { passive:false });
+
+  document.addEventListener('pointercancel', (e) => {
+    if (holding && e.pointerId === holdPointerId){
+      // cancel hold without throw
+      holding = false;
+      holdPointerId = null;
+      holdPointerType = null;
+      lastHoldPos = null;
+      try { (e.target || document).releasePointerCapture(e.pointerId); } catch (err) {}
+    }
+  }, { passive:false });
+
+  // double-tap (touch) toggles gravity
   let lastTap = 0;
   canvas.addEventListener('touchend', (e) => {
     const now = Date.now();
     const dt = now - lastTap;
-    if (dt < 300) {
+    if (dt < 300){
       const touch = e.changedTouches[0];
-      const pos = clientToCanvas(touch.clientX, touch.clientY);
-      const dx = pos.x - box.position.x;
-      const dy = pos.y - box.position.y;
+      // compute distance to box in screen coords
+      const rect = canvas.getBoundingClientRect();
+      const boxScreenX = box.position.x * (rect.width / canvas.width) + rect.left;
+      const boxScreenY = box.position.y * (rect.height / canvas.height) + rect.top;
+      const dx = touch.clientX - boxScreenX;
+      const dy = touch.clientY - boxScreenY;
       const dist = Math.sqrt(dx*dx + dy*dy);
-      if (dist < boxSize / 1.2) toggleGravity();
+      if (dist < boxSize / 1.2) {
+        gravityEnabled = !gravityEnabled;
+        toggleGravity();
+      }
       lastTap = 0;
       return;
     }
     lastTap = now;
   });
 
-  // Right-click toggles gravity on PC
+  // right-click toggles gravity on PC
   canvas.addEventListener('contextmenu', (e) => {
     e.preventDefault();
-    const pos = clientToCanvas(e.clientX, e.clientY);
-    const dx = pos.x - box.position.x;
-    const dy = pos.y - box.position.y;
+    const rect = canvas.getBoundingClientRect();
+    const boxScreenX = box.position.x * (rect.width / canvas.width) + rect.left;
+    const boxScreenY = box.position.y * (rect.height / canvas.height) + rect.top;
+    const dx = e.clientX - boxScreenX;
+    const dy = e.clientY - boxScreenY;
     const dist = Math.sqrt(dx*dx + dy*dy);
-    if (dist < boxSize / 1.2) toggleGravity();
+    if (dist < boxSize / 1.2) {
+      gravityEnabled = !gravityEnabled;
+      toggleGravity();
+    }
   });
 
-  // Velocity clamp
+  // clamp velocity
   Events.on(engine, 'beforeUpdate', () => {
     const maxSpeed = 50;
     let vx = box.velocity.x;
@@ -466,35 +384,34 @@
     Body.setVelocity(box, { x: vx, y: vy });
   });
 
+  // runner/render
   const runner = Runner.create();
-  function startGame() {
+  function startGame(){
     Runner.run(runner, engine);
     Render.run(render);
   }
 
-  // Device motion/orientation: only enable on mobile
-  async function startMotion() {
-    if (isPC) return; // do not enable tilt on PC
-
-    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+  // device tilt only on mobile
+  async function startMotion(){
+    if (!isMobile) return; // no tilt on PC
+    if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function"){
       try {
         const permission = await DeviceMotionEvent.requestPermission();
-        if (permission !== 'granted') return;
+        if (permission !== "granted") return;
       } catch {}
     }
-
     window.addEventListener('deviceorientation', (event) => {
       const tiltX = event.gamma;
       const tiltY = event.beta;
       if (tiltX == null || tiltY == null) return;
-      if (gravityEnabled) {
+      if (gravityEnabled){
         engine.gravity.x = tiltX / 30;
         engine.gravity.y = tiltY / 30;
       }
     });
   }
 
-  // Play button: request fullscreen, attempt orientation lock, fallback, then start
+  // play button: fullscreen then start
   playButton.addEventListener('click', async () => {
     const el = document.documentElement;
     try {
@@ -502,24 +419,11 @@
       else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen();
       else if (el.msRequestFullscreen) await el.msRequestFullscreen();
     } catch {}
-
-    await enforcePortrait();
-
     playButton.style.display = 'none';
     startMotion();
     startGame();
   });
 
-  // Keyboard shortcuts for PC
-  window.addEventListener('keydown', (e) => {
-    if (e.code === 'Space') {
-      e.preventDefault();
-      toggleGravity();
-    } else if (e.key === 'r' || e.key === 'R') {
-      Body.setPosition(box, { x: logicalWidth / 2, y: logicalHeight / 4 });
-      Body.setVelocity(box, { x: 0, y: 0 });
-    }
-  });
   </script>
 </body>
 </html>
