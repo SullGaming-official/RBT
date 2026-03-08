@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>RealityBreaker</title>
+  <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>RealityBreaker</title>
 
   <style>
     html, body {
@@ -39,16 +39,9 @@
       touch-action: none;
     }
 
-    /* When fallback is active we add this class and set transform from JS */
-    .rotate-to-portrait #content {
-      /* transform applied dynamically */
-    }
-
-    body {
-      margin: 0;
-      overflow: hidden;
-      background: transparent;
-    }
+    /* Classes applied by JS for different fallback modes */
+    .rotate-to-portrait #content { /* transform set dynamically */ }
+    .rotate-180 #content { /* transform set dynamically for 180deg correction */ }
 
     #world {
       position: absolute;
@@ -76,258 +69,293 @@
       touch-action: manipulation;
     }
 
-    /* Rotate UI elements back upright when content is rotated */
+    /* When content is rotated -90deg we rotate UI elements back upright */
     .rotate-to-portrait #playButton {
-      transform: rotate(90deg);
+      transform: rotate(90deg) translate(-50%, -50%);
+      transform-origin: center;
+    }
+
+    /* When content is rotated 180deg we rotate UI elements back upright */
+    .rotate-180 #playButton {
+      transform: rotate(180deg) translate(-50%, -50%);
       transform-origin: center;
     }
   </style>
 </head>
-
 <body>
-
-<div id="portraitWrapper" class="portrait-wrapper">
-  <div id="content">
-    <div id="playButton">▶ Play</div>
-    <canvas id="world"></canvas>
+  <div id="portraitWrapper" class="portrait-wrapper">
+    <div id="content">
+      <div id="playButton">▶ Play</div>
+      <canvas id="world"></canvas>
+    </div>
   </div>
-</div>
 
-<script src="https://unpkg.com/matter-js@0.20.0/build/matter.min.js"></script>
+  <script src="https://unpkg.com/matter-js@0.20.0/build/matter.min.js"></script>
 
-<script>
-/*
-  Integrated portrait lock + rotation fallback into your original RealityBreaker code.
-  - Attempts screen.orientation.lock('portrait') in fullscreen.
-  - If lock fails or is unavailable, applies a rotate(-90deg)+scale fallback so landscape tablets appear portrait.
-  - Canvas logical size is set to the portrait dimensions so existing Matter.js logic works unchanged.
-  - Input coordinates are mapped from clientX/Y to canvas logical coordinates.
-*/
+  <script>
+  /*
+    RealityBreaker integrated with:
+    - screen.orientation.lock('portrait-primary') to prevent upside-down portrait
+    - rotation fallback for devices/browsers that don't support orientation lock
+    - detection and correction for upside-down (180deg) portrait when lock is unavailable
+    - pointer coordinate mapping so interactions still work when content is transformed
+  */
 
-const playButton = document.getElementById("playButton");
-const wrapper = document.getElementById("portraitWrapper");
-const content = document.getElementById("content");
-const canvas = document.getElementById('world');
+  const playButton = document.getElementById("playButton");
+  const wrapper = document.getElementById("portraitWrapper");
+  const content = document.getElementById("content");
+  const canvas = document.getElementById('world');
 
-const {
-  Engine,
-  Render,
-  World,
-  Bodies,
-  Runner,
-  Mouse,
-  MouseConstraint,
-  Body,
-  Events
-} = Matter;
+  const { Engine, Render, World, Bodies, Runner, Mouse, MouseConstraint, Body, Events } = Matter;
 
-// Logical canvas size (portrait-oriented)
-let logicalWidth = window.innerWidth;
-let logicalHeight = window.innerHeight;
+  // Logical canvas size (portrait-oriented)
+  let logicalWidth = window.innerWidth;
+  let logicalHeight = window.innerHeight;
 
-function setCanvasSize(w, h) {
-  logicalWidth = Math.round(w);
-  logicalHeight = Math.round(h);
-  const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.round(logicalWidth * ratio);
-  canvas.height = Math.round(logicalHeight * ratio);
-  canvas.style.width = logicalWidth + 'px';
-  canvas.style.height = logicalHeight + 'px';
-}
-
-setCanvasSize(logicalWidth, logicalHeight);
-
-const engine = Engine.create();
-engine.gravity.y = 1;
-
-const render = Render.create({
-  canvas: canvas,
-  engine: engine,
-  options:{
-    wireframes:false,
-    background:'transparent',
-    width: logicalWidth,
-    height: logicalHeight,
-    pixelRatio: window.devicePixelRatio || 1
-  }
-});
-
-let ground, ceiling, leftWall, rightWall;
-
-function createWalls(){
-  // Remove existing walls if present
-  if (ground) World.remove(engine.world, ground);
-  if (ceiling) World.remove(engine.world, ceiling);
-  if (leftWall) World.remove(engine.world, leftWall);
-  if (rightWall) World.remove(engine.world, rightWall);
-
-  const w = logicalWidth;
-  const h = logicalHeight;
-
-  ground = Bodies.rectangle(w/2, h+250, w+500, 500, {isStatic:true, render:{visible:false}});
-  ceiling = Bodies.rectangle(w/2, -250, w+500, 500, {isStatic:true, render:{visible:false}});
-  leftWall = Bodies.rectangle(-250, h/2, 500, h+500, {isStatic:true, render:{visible:false}});
-  rightWall = Bodies.rectangle(w+250, h/2, 500, h+500, {isStatic:true, render:{visible:false}});
-
-  World.add(engine.world,[ground,ceiling,leftWall,rightWall]);
-}
-
-createWalls();
-
-const boxSize = 120;
-
-let box = Bodies.rectangle(
-  logicalWidth/2,
-  logicalHeight/4,
-  boxSize,
-  boxSize,
-  {
-    restitution:0.8,
-    frictionAir:0.01,
-    friction:0.001,
-    render:{fillStyle:'#0A013F'}
-  }
-);
-
-World.add(engine.world,box);
-
-function keepBoxInside(){
-  const w = logicalWidth;
-  const h = logicalHeight;
-  const half = boxSize/2;
-
-  let x = box.position.x;
-  let y = box.position.y;
-
-  if(x < half) x = half;
-  if(x > w-half) x = w-half;
-  if(y < half) y = half;
-  if(y > h-half) y = h-half;
-
-  Body.setPosition(box,{x,y});
-  Body.setVelocity(box,{x:0,y:0});
-}
-
-// Map client coordinates to canvas logical coordinates (handles transforms)
-function clientToCanvas(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  const x = (clientX - rect.left) * (logicalWidth / rect.width);
-  const y = (clientY - rect.top) * (logicalHeight / rect.height);
-  return { x, y };
-}
-
-// Rotation fallback: rotate content -90deg and scale to fit when device is landscape
-function applyRotationFallback() {
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-
-  if (vw > vh) {
-    wrapper.classList.add('rotate-to-portrait');
-
-    // After rotating -90deg, the content's width should equal device height,
-    // and content's height should equal device width.
-    const portraitW = vh; // logical width after rotation
-    const portraitH = vw; // logical height after rotation
-
-    const scaleX = vw / portraitW;
-    const scaleY = vh / portraitH;
-    const scale = Math.min(scaleX, scaleY);
-
-    content.style.transform = `rotate(-90deg) scale(${scale})`;
-    content.style.transformOrigin = '50% 50%';
-
-    // Set canvas to the portrait logical size (before scale)
-    setCanvasSize(portraitW, portraitH);
-
-    content.style.width = portraitW + 'px';
-    content.style.height = portraitH + 'px';
-  } else {
-    wrapper.classList.remove('rotate-to-portrait');
-    content.style.transform = '';
-    content.style.width = '';
-    content.style.height = '';
-    setCanvasSize(window.innerWidth, window.innerHeight);
-  }
-
-  // Update Matter render sizes and walls
-  render.options.width = logicalWidth;
-  render.options.height = logicalHeight;
-  render.canvas.width = canvas.width;
-  render.canvas.height = canvas.height;
-  render.canvas.style.width = canvas.style.width;
-  render.canvas.style.height = canvas.style.height;
-  if (render.context && render.context.setTransform) {
+  function setCanvasSize(w, h) {
+    logicalWidth = Math.round(w);
+    logicalHeight = Math.round(h);
     const ratio = window.devicePixelRatio || 1;
-    render.context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    canvas.width = Math.round(logicalWidth * ratio);
+    canvas.height = Math.round(logicalHeight * ratio);
+    canvas.style.width = logicalWidth + 'px';
+    canvas.style.height = logicalHeight + 'px';
+  }
+
+  setCanvasSize(logicalWidth, logicalHeight);
+
+  const engine = Engine.create();
+  engine.gravity.y = 1;
+
+  const render = Render.create({
+    canvas: canvas,
+    engine: engine,
+    options:{
+      wireframes:false,
+      background:'transparent',
+      width: logicalWidth,
+      height: logicalHeight,
+      pixelRatio: window.devicePixelRatio || 1
+    }
+  });
+
+  let ground, ceiling, leftWall, rightWall;
+
+  function createWalls(){
+    if (ground) World.remove(engine.world, ground);
+    if (ceiling) World.remove(engine.world, ceiling);
+    if (leftWall) World.remove(engine.world, leftWall);
+    if (rightWall) World.remove(engine.world, rightWall);
+
+    const w = logicalWidth;
+    const h = logicalHeight;
+
+    ground = Bodies.rectangle(w/2, h+250, w+500, 500, {isStatic:true, render:{visible:false}});
+    ceiling = Bodies.rectangle(w/2, -250, w+500, 500, {isStatic:true, render:{visible:false}});
+    leftWall = Bodies.rectangle(-250, h/2, 500, h+500, {isStatic:true, render:{visible:false}});
+    rightWall = Bodies.rectangle(w+250, h/2, 500, h+500, {isStatic:true, render:{visible:false}});
+
+    World.add(engine.world,[ground,ceiling,leftWall,rightWall]);
   }
 
   createWalls();
-  keepBoxInside();
-}
 
-async function enforcePortrait() {
-  try {
-    if (screen.orientation && screen.orientation.lock) {
-      await screen.orientation.lock('portrait');
-      // If lock succeeds, size canvas to viewport
-      setCanvasSize(window.innerWidth, window.innerHeight);
-      render.options.width = logicalWidth;
-      render.options.height = logicalHeight;
-      render.canvas.width = canvas.width;
-      render.canvas.height = canvas.height;
-      render.canvas.style.width = canvas.style.width;
-      render.canvas.style.height = canvas.style.height;
-      if (render.context && render.context.setTransform) {
-        const ratio = window.devicePixelRatio || 1;
-        render.context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  const boxSize = 120;
+
+  let box = Bodies.rectangle(
+    logicalWidth/2,
+    logicalHeight/4,
+    boxSize,
+    boxSize,
+    {
+      restitution:0.8,
+      frictionAir:0.01,
+      friction:0.001,
+      render:{fillStyle:'#0A013F'}
+    }
+  );
+
+  World.add(engine.world,box);
+
+  function keepBoxInside(){
+    const w = logicalWidth;
+    const h = logicalHeight;
+    const half = boxSize/2;
+
+    let x = box.position.x;
+    let y = box.position.y;
+
+    if(x < half) x = half;
+    if(x > w-half) x = w-half;
+    if(y < half) y = half;
+    if(y > h-half) y = h-half;
+
+    Body.setPosition(box,{x,y});
+    Body.setVelocity(box,{x:0,y:0});
+  }
+
+  // Map client coordinates to canvas logical coordinates (handles transforms)
+  function clientToCanvas(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const x = (clientX - rect.left) * (logicalWidth / rect.width);
+    const y = (clientY - rect.top) * (logicalHeight / rect.height);
+    return { x, y };
+  }
+
+  // Helper to read device orientation angle (0, 90, 180, 270) if available
+  function getDeviceAngle() {
+    if (screen.orientation && typeof screen.orientation.angle === 'number') {
+      return screen.orientation.angle;
+    }
+    if (typeof window.orientation === 'number') {
+      return window.orientation;
+    }
+    return 0;
+  }
+
+  // Rotation fallback and 180deg correction
+  function applyRotationFallback() {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const angle = ((getDeviceAngle() % 360) + 360) % 360; // normalize 0..359
+
+    // Clear classes first
+    wrapper.classList.remove('rotate-to-portrait', 'rotate-180');
+
+    if (vw > vh) {
+      // Landscape: rotate content -90deg and scale to fit
+      wrapper.classList.add('rotate-to-portrait');
+
+      const portraitW = vh; // logical width after rotation
+      const portraitH = vw; // logical height after rotation
+
+      const scaleX = vw / portraitW;
+      const scaleY = vh / portraitH;
+      const scale = Math.min(scaleX, scaleY);
+
+      content.style.transform = `rotate(-90deg) scale(${scale})`;
+      content.style.transformOrigin = '50% 50%';
+
+      setCanvasSize(portraitW, portraitH);
+      content.style.width = portraitW + 'px';
+      content.style.height = portraitH + 'px';
+    } else {
+      // Native portrait: correct upside-down (180deg) if detected
+      if (angle === 180) {
+        // Device is upside-down portrait; rotate content 180deg to keep UI upright
+        wrapper.classList.add('rotate-180');
+        content.style.transform = 'rotate(180deg)';
+        content.style.transformOrigin = '50% 50%';
+      } else {
+        // Normal portrait
+        content.style.transform = '';
+        content.style.width = '';
+        content.style.height = '';
       }
-      wrapper.classList.remove('rotate-to-portrait');
-      createWalls();
-      keepBoxInside();
+      setCanvasSize(window.innerWidth, window.innerHeight);
+    }
+
+    // Update Matter render sizes and walls
+    render.options.width = logicalWidth;
+    render.options.height = logicalHeight;
+    const ratio = window.devicePixelRatio || 1;
+    render.canvas.width = canvas.width;
+    render.canvas.height = canvas.height;
+    render.canvas.style.width = canvas.style.width;
+    render.canvas.style.height = canvas.style.height;
+    if (render.context && render.context.setTransform) {
+      render.context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    }
+
+    createWalls();
+    keepBoxInside();
+  }
+
+  // Try to lock orientation to portrait-primary (prevents upside-down)
+  async function enforcePortrait() {
+    try {
+      if (screen.orientation && screen.orientation.lock) {
+        // Use portrait-primary to avoid upside-down portrait
+        await screen.orientation.lock('portrait-primary');
+        // If lock succeeds, size canvas to viewport and clear fallback classes
+        setCanvasSize(window.innerWidth, window.innerHeight);
+        render.options.width = logicalWidth;
+        render.options.height = logicalHeight;
+        const ratio = window.devicePixelRatio || 1;
+        render.canvas.width = canvas.width;
+        render.canvas.height = canvas.height;
+        render.canvas.style.width = canvas.style.width;
+        render.canvas.style.height = canvas.style.height;
+        if (render.context && render.context.setTransform) {
+          render.context.setTransform(ratio, 0, 0, ratio, 0, 0);
+        }
+        wrapper.classList.remove('rotate-to-portrait', 'rotate-180');
+        createWalls();
+        keepBoxInside();
+        return;
+      }
+    } catch (err) {
+      // lock failed or rejected; fall through to fallback
+    }
+
+    // Fallback: apply rotation shim and 180deg correction
+    applyRotationFallback();
+  }
+
+  // Handle window resize / orientation change
+  window.addEventListener('resize', () => {
+    // small delay on some devices helps layout settle
+    setTimeout(applyRotationFallback, 30);
+  });
+  window.addEventListener('orientationchange', () => {
+    setTimeout(applyRotationFallback, 50);
+  });
+
+  // Gravity toggle and interactions
+  let gravityEnabled = true;
+  function toggleGravity(){
+    if(gravityEnabled){
+      engine.gravity.x = 0;
+      engine.gravity.y = 1;
+    }else{
+      engine.gravity.x = 0;
+      engine.gravity.y = 0;
+      Body.applyForce(box,box.position,{
+        x:(Math.random()-0.5)*0.002,
+        y:-0.01
+      });
+    }
+  }
+
+  // Touch double-tap toggles gravity (mapped to canvas coords)
+  let lastTap = 0;
+  canvas.addEventListener("touchend",(e)=>{
+    const now = Date.now();
+    const dt = now-lastTap;
+
+    if(dt < 300){
+      const touch = e.changedTouches[0];
+      const pos = clientToCanvas(touch.clientX, touch.clientY);
+      const dx = pos.x - box.position.x;
+      const dy = pos.y - box.position.y;
+      const dist = Math.sqrt(dx*dx+dy*dy);
+
+      if(dist < boxSize/1.2){
+        gravityEnabled = !gravityEnabled;
+        toggleGravity();
+      }
+
+      lastTap = 0;
       return;
     }
-  } catch (err) {
-    // ignore and fallback
-  }
 
-  applyRotationFallback();
-}
+    lastTap = now;
+  });
 
-// Handle window resize / orientation change
-window.addEventListener('resize', () => {
-  applyRotationFallback();
-});
-window.addEventListener('orientationchange', () => {
-  // small delay to allow layout to settle on some devices
-  setTimeout(applyRotationFallback, 50);
-});
-
-// Original gravity toggle logic (keeps gravityEnabled flag)
-let gravityEnabled = true;
-
-function toggleGravity(){
-  if(gravityEnabled){
-    engine.gravity.x = 0;
-    engine.gravity.y = 1;
-  }else{
-    engine.gravity.x = 0;
-    engine.gravity.y = 0;
-    Body.applyForce(box,box.position,{
-      x:(Math.random()-0.5)*0.002,
-      y:-0.01
-    });
-  }
-}
-
-// Input handling: touch double-tap toggles gravity
-let lastTap = 0;
-canvas.addEventListener("touchend",(e)=>{
-  const now = Date.now();
-  const dt = now-lastTap;
-
-  if(dt < 300){
-    const touch = e.changedTouches[0];
-    const pos = clientToCanvas(touch.clientX, touch.clientY);
+  // Right-click toggles gravity
+  canvas.addEventListener("contextmenu",(e)=>{
+    e.preventDefault();
+    const pos = clientToCanvas(e.clientX, e.clientY);
     const dx = pos.x - box.position.x;
     const dy = pos.y - box.position.y;
     const dist = Math.sqrt(dx*dx+dy*dy);
@@ -336,139 +364,116 @@ canvas.addEventListener("touchend",(e)=>{
       gravityEnabled = !gravityEnabled;
       toggleGravity();
     }
+  });
 
-    lastTap = 0;
-    return;
-  }
-
-  lastTap = now;
-});
-
-// Context menu (right-click) toggles gravity if clicking the box
-canvas.addEventListener("contextmenu",(e)=>{
-  e.preventDefault();
-  const pos = clientToCanvas(e.clientX, e.clientY);
-  const dx = pos.x - box.position.x;
-  const dy = pos.y - box.position.y;
-  const dist = Math.sqrt(dx*dx+dy*dy);
-
-  if(dist < boxSize/1.2){
-    gravityEnabled = !gravityEnabled;
-    toggleGravity();
-  }
-});
-
-// Mouse and drag interactions
-const mouse = Mouse.create(canvas);
-const mouseConstraint = MouseConstraint.create(engine,{
-  mouse: mouse,
-  constraint:{
-    stiffness:0.2,
-    render:{visible:false}
-  }
-});
-World.add(engine.world,mouseConstraint);
-
-let lastMousePos = {x:0,y:0};
-let interactive = false;
-
-const INTERACT_RADIUS = 180;
-const EXIT_RADIUS = 220;
-const SPEED_THRESHOLD = 8;
-const PUNCH_FORCE = 0.005;
-
-// Use pointermove on document and map to canvas coords (works with transforms)
-document.addEventListener('pointermove', (e) => {
-  const pos = clientToCanvas(e.clientX, e.clientY);
-  const mousePos = {x: pos.x, y: pos.y};
-
-  const dx = mousePos.x - lastMousePos.x;
-  const dy = mousePos.y - lastMousePos.y;
-  const speed = Math.sqrt(dx*dx+dy*dy);
-  lastMousePos = mousePos;
-
-  const distX = mousePos.x - box.position.x;
-  const distY = mousePos.y - box.position.y;
-  const dist = Math.sqrt(distX*distX+distY*distY);
-
-  if(!interactive && dist < INTERACT_RADIUS){
-    interactive = true;
-  }else if(interactive && dist > EXIT_RADIUS){
-    interactive = false;
-  }
-
-  if(dist < INTERACT_RADIUS && speed > SPEED_THRESHOLD){
-    Body.applyForce(box,box.position,{
-      x:dx*PUNCH_FORCE,
-      y:dy*PUNCH_FORCE
-    });
-  }
-});
-
-// Velocity clamp
-Events.on(engine,'beforeUpdate',()=>{
-  const maxSpeed = 50;
-  let vx = box.velocity.x;
-  let vy = box.velocity.y;
-
-  if(vx > maxSpeed) vx = maxSpeed;
-  if(vx < -maxSpeed) vx = -maxSpeed;
-  if(vy > maxSpeed) vy = maxSpeed;
-  if(vy < -maxSpeed) vy = -maxSpeed;
-
-  Body.setVelocity(box,{x:vx,y:vy});
-});
-
-const runner = Runner.create();
-
-function startGame(){
-  Runner.run(runner,engine);
-  Render.run(render);
-}
-
-async function startMotion(){
-  if(typeof DeviceMotionEvent !== "undefined" &&
-     typeof DeviceMotionEvent.requestPermission === "function"){
-    try{
-      const permission = await DeviceMotionEvent.requestPermission();
-      if(permission !== "granted") return;
-    }catch{}
-  }
-
-  window.addEventListener("deviceorientation",(event)=>{
-    const tiltX = event.gamma;
-    const tiltY = event.beta;
-    if(tiltX == null || tiltY == null) return;
-    if(gravityEnabled){
-      engine.gravity.x = tiltX/30;
-      engine.gravity.y = tiltY/30;
+  // Mouse and drag interactions (pointermove mapped to canvas coords)
+  const mouse = Mouse.create(canvas);
+  const mouseConstraint = MouseConstraint.create(engine,{
+    mouse: mouse,
+    constraint:{
+      stiffness:0.2,
+      render:{visible:false}
     }
   });
-}
+  World.add(engine.world,mouseConstraint);
 
-// Play button: request fullscreen, attempt orientation lock, fallback if needed, then start
-playButton.addEventListener("click",async()=>{
-  const el = document.documentElement;
+  let lastMousePos = {x:0,y:0};
+  let interactive = false;
 
-  try{
-    if(el.requestFullscreen) await el.requestFullscreen();
-    else if(el.webkitRequestFullscreen) await el.webkitRequestFullscreen();
-    else if(el.msRequestFullscreen) await el.msRequestFullscreen();
-  }catch{}
+  const INTERACT_RADIUS = 180;
+  const EXIT_RADIUS = 220;
+  const SPEED_THRESHOLD = 8;
+  const PUNCH_FORCE = 0.005;
 
-  // Try to lock orientation or apply fallback
-  await enforcePortrait();
+  document.addEventListener('pointermove', (e) => {
+    const pos = clientToCanvas(e.clientX, e.clientY);
+    const mousePos = {x: pos.x, y: pos.y};
 
-  playButton.style.display="none";
+    const dx = mousePos.x - lastMousePos.x;
+    const dy = mousePos.y - lastMousePos.y;
+    const speed = Math.sqrt(dx*dx+dy*dy);
+    lastMousePos = mousePos;
 
-  startMotion();
-  startGame();
-});
+    const distX = mousePos.x - box.position.x;
+    const distY = mousePos.y - box.position.y;
+    const dist = Math.sqrt(distX*distX+distY*distY);
 
-// Initial layout
-applyRotationFallback();
+    if(!interactive && dist < INTERACT_RADIUS){
+      interactive = true;
+    }else if(interactive && dist > EXIT_RADIUS){
+      interactive = false;
+    }
 
-</script>
+    if(dist < INTERACT_RADIUS && speed > SPEED_THRESHOLD){
+      Body.applyForce(box,box.position,{
+        x:dx*PUNCH_FORCE,
+        y:dy*PUNCH_FORCE
+      });
+    }
+  });
 
+  // Velocity clamp
+  Events.on(engine,'beforeUpdate',()=>{
+    const maxSpeed = 50;
+    let vx = box.velocity.x;
+    let vy = box.velocity.y;
+
+    if(vx > maxSpeed) vx = maxSpeed;
+    if(vx < -maxSpeed) vx = -maxSpeed;
+    if(vy > maxSpeed) vy = maxSpeed;
+    if(vy < -maxSpeed) vy = -maxSpeed;
+
+    Body.setVelocity(box,{x:vx,y:vy});
+  });
+
+  const runner = Runner.create();
+
+  function startGame(){
+    Runner.run(runner,engine);
+    Render.run(render);
+  }
+
+  async function startMotion(){
+    if(typeof DeviceMotionEvent !== "undefined" &&
+       typeof DeviceMotionEvent.requestPermission === "function"){
+      try{
+        const permission = await DeviceMotionEvent.requestPermission();
+        if(permission !== "granted") return;
+      }catch{}
+    }
+
+    window.addEventListener("deviceorientation",(event)=>{
+      const tiltX = event.gamma;
+      const tiltY = event.beta;
+      if(tiltX == null || tiltY == null) return;
+      if(gravityEnabled){
+        engine.gravity.x = tiltX/30;
+        engine.gravity.y = tiltY/30;
+      }
+    });
+  }
+
+  // Play button: request fullscreen, attempt orientation lock (portrait-primary), fallback if needed, then start
+  playButton.addEventListener("click",async()=>{
+    const el = document.documentElement;
+
+    try{
+      if(el.requestFullscreen) await el.requestFullscreen();
+      else if(el.webkitRequestFullscreen) await el.webkitRequestFullscreen();
+      else if(el.msRequestFullscreen) await el.msRequestFullscreen();
+    }catch{}
+
+    // Try to lock to portrait-primary to prevent upside-down portrait
+    await enforcePortrait();
+
+    playButton.style.display="none";
+
+    startMotion();
+    startGame();
+  });
+
+  // Initial layout
+  applyRotationFallback();
+  </script>
 </body>
 </html>
