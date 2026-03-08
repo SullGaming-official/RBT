@@ -94,10 +94,10 @@
 
   <script>
   /*
-    RealityBreaker integrated with:
-    - screen.orientation.lock('portrait-primary') to prevent upside-down portrait
-    - rotation fallback for devices/browsers that don't support orientation lock
-    - detection and correction for upside-down (180deg) portrait when lock is unavailable
+    RealityBreaker with:
+    - portrait-primary lock (prevents upside-down)
+    - rotation fallback for devices without lock
+    - custom drag/pickup implementation that works with transforms (so you can still pick it up)
     - pointer coordinate mapping so interactions still work when content is transformed
   */
 
@@ -237,6 +237,7 @@
       content.style.transformOrigin = '50% 50%';
 
       setCanvasSize(portraitW, portraitH);
+
       content.style.width = portraitW + 'px';
       content.style.height = portraitH + 'px';
     } else {
@@ -304,7 +305,6 @@
 
   // Handle window resize / orientation change
   window.addEventListener('resize', () => {
-    // small delay on some devices helps layout settle
     setTimeout(applyRotationFallback, 30);
   });
   window.addEventListener('orientationchange', () => {
@@ -327,46 +327,138 @@
     }
   }
 
-  // Touch double-tap toggles gravity (mapped to canvas coords)
-  let lastTap = 0;
-  canvas.addEventListener("touchend",(e)=>{
-    const now = Date.now();
-    const dt = now-lastTap;
+  // --- Custom pickup/drag implementation (works with transforms) ---
+  // This replaces relying solely on Matter.MouseConstraint for picking up the box.
+  // It supports pointerdown/pointermove/pointerup and maps client coords to canvas logical coords.
 
-    if(dt < 300){
-      const touch = e.changedTouches[0];
-      const pos = clientToCanvas(touch.clientX, touch.clientY);
-      const dx = pos.x - box.position.x;
-      const dy = pos.y - box.position.y;
-      const dist = Math.sqrt(dx*dx+dy*dy);
+  let isDragging = false;
+  let dragPointerId = null;
+  let dragOffset = { x: 0, y: 0 };
+  let lastDragPos = null;
+  let lastDragTime = 0;
 
-      if(dist < boxSize/1.2){
-        gravityEnabled = !gravityEnabled;
-        toggleGravity();
-      }
+  function startDrag(pointerId, clientX, clientY) {
+    const pos = clientToCanvas(clientX, clientY);
+    const dx = pos.x - box.position.x;
+    const dy = pos.y - box.position.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if (dist <= boxSize * 0.7) {
+      isDragging = true;
+      dragPointerId = pointerId;
+      dragOffset.x = pos.x - box.position.x;
+      dragOffset.y = pos.y - box.position.y;
+      lastDragPos = pos;
+      lastDragTime = performance.now();
+      // reduce influence of gravity while dragging
+      Body.setVelocity(box, { x: 0, y: 0 });
+      // optional: make the body less affected by collisions while dragging
+      // we won't change isStatic; we'll just move it directly
+      return true;
+    }
+    return false;
+  }
 
-      lastTap = 0;
+  function moveDrag(clientX, clientY) {
+    if (!isDragging) return;
+    const pos = clientToCanvas(clientX, clientY);
+    const targetX = pos.x - dragOffset.x;
+    const targetY = pos.y - dragOffset.y;
+    // Move the box directly to follow the pointer
+    Body.setPosition(box, { x: targetX, y: targetY });
+    // zero velocity while dragging to avoid jitter
+    Body.setVelocity(box, { x: 0, y: 0 });
+    lastDragPos = pos;
+    lastDragTime = performance.now();
+  }
+
+  function endDrag(clientX, clientY) {
+    if (!isDragging) return;
+    const now = performance.now();
+    const pos = clientToCanvas(clientX, clientY);
+    // compute throw velocity from last movement
+    const dt = Math.max(1, now - lastDragTime); // ms
+    const vx = (pos.x - lastDragPos.x) / (dt / 1000); // px/s
+    const vy = (pos.y - lastDragPos.y) / (dt / 1000); // px/s
+
+    // Apply a scaled velocity to the body (tune multiplier for feel)
+    const velocityScale = 0.02; // tune this to taste
+    Body.setVelocity(box, { x: vx * velocityScale, y: vy * velocityScale });
+
+    isDragging = false;
+    dragPointerId = null;
+    lastDragPos = null;
+  }
+
+  // Pointer event handlers (works for mouse and touch)
+  document.addEventListener('pointerdown', (e) => {
+    // ignore non-primary buttons for mouse
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+    // Try to start custom drag; if started, capture pointer
+    const started = startDrag(e.pointerId, e.clientX, e.clientY);
+    if (started) {
+      try { (e.target || document).setPointerCapture(e.pointerId); } catch (err) {}
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  document.addEventListener('pointermove', (e) => {
+    // If dragging with this pointer, move the box
+    if (isDragging && e.pointerId === dragPointerId) {
+      moveDrag(e.clientX, e.clientY);
+      e.preventDefault();
       return;
     }
 
-    lastTap = now;
-  });
-
-  // Right-click toggles gravity
-  canvas.addEventListener("contextmenu",(e)=>{
-    e.preventDefault();
+    // Otherwise, keep existing "smack" behavior (speed-based force)
+    // Map client coords to canvas coords
     const pos = clientToCanvas(e.clientX, e.clientY);
-    const dx = pos.x - box.position.x;
-    const dy = pos.y - box.position.y;
-    const dist = Math.sqrt(dx*dx+dy*dy);
+    const mousePos = { x: pos.x, y: pos.y };
 
-    if(dist < boxSize/1.2){
-      gravityEnabled = !gravityEnabled;
-      toggleGravity();
+    // compute speed using lastMousePos (we'll store it on window)
+    if (!window._rb_lastMousePos) window._rb_lastMousePos = { x: mousePos.x, y: mousePos.y };
+    const dx = mousePos.x - window._rb_lastMousePos.x;
+    const dy = mousePos.y - window._rb_lastMousePos.y;
+    const speed = Math.sqrt(dx*dx + dy*dy);
+    window._rb_lastMousePos = mousePos;
+
+    const distX = mousePos.x - box.position.x;
+    const distY = mousePos.y - box.position.y;
+    const dist = Math.sqrt(distX*distX + distY*distY);
+
+    const INTERACT_RADIUS = 180;
+    const EXIT_RADIUS = 220;
+    const SPEED_THRESHOLD = 8;
+    const PUNCH_FORCE = 0.005;
+
+    if (dist < INTERACT_RADIUS && speed > SPEED_THRESHOLD) {
+      Body.applyForce(box, box.position, {
+        x: dx * PUNCH_FORCE,
+        y: dy * PUNCH_FORCE
+      });
+    }
+  }, { passive: false });
+
+  document.addEventListener('pointerup', (e) => {
+    if (isDragging && e.pointerId === dragPointerId) {
+      endDrag(e.clientX, e.clientY);
+      try { (e.target || document).releasePointerCapture(e.pointerId); } catch (err) {}
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  document.addEventListener('pointercancel', (e) => {
+    if (isDragging && e.pointerId === dragPointerId) {
+      // cancel drag without throwing
+      isDragging = false;
+      dragPointerId = null;
+      lastDragPos = null;
+      try { (e.target || document).releasePointerCapture(e.pointerId); } catch (err) {}
     }
   });
 
-  // Mouse and drag interactions (pointermove mapped to canvas coords)
+  // --- Keep a lightweight MouseConstraint for clicks/drags that happen directly on canvas
+  // It will coexist with the custom drag; custom drag takes precedence.
   const mouse = Mouse.create(canvas);
   const mouseConstraint = MouseConstraint.create(engine,{
     mouse: mouse,
@@ -376,41 +468,6 @@
     }
   });
   World.add(engine.world,mouseConstraint);
-
-  let lastMousePos = {x:0,y:0};
-  let interactive = false;
-
-  const INTERACT_RADIUS = 180;
-  const EXIT_RADIUS = 220;
-  const SPEED_THRESHOLD = 8;
-  const PUNCH_FORCE = 0.005;
-
-  document.addEventListener('pointermove', (e) => {
-    const pos = clientToCanvas(e.clientX, e.clientY);
-    const mousePos = {x: pos.x, y: pos.y};
-
-    const dx = mousePos.x - lastMousePos.x;
-    const dy = mousePos.y - lastMousePos.y;
-    const speed = Math.sqrt(dx*dx+dy*dy);
-    lastMousePos = mousePos;
-
-    const distX = mousePos.x - box.position.x;
-    const distY = mousePos.y - box.position.y;
-    const dist = Math.sqrt(distX*distX+distY*distY);
-
-    if(!interactive && dist < INTERACT_RADIUS){
-      interactive = true;
-    }else if(interactive && dist > EXIT_RADIUS){
-      interactive = false;
-    }
-
-    if(dist < INTERACT_RADIUS && speed > SPEED_THRESHOLD){
-      Body.applyForce(box,box.position,{
-        x:dx*PUNCH_FORCE,
-        y:dy*PUNCH_FORCE
-      });
-    }
-  });
 
   // Velocity clamp
   Events.on(engine,'beforeUpdate',()=>{
@@ -452,6 +509,45 @@
       }
     });
   }
+
+  // Touch double-tap toggles gravity (mapped to canvas coords)
+  let lastTap = 0;
+  canvas.addEventListener("touchend",(e)=>{
+    const now = Date.now();
+    const dt = now-lastTap;
+
+    if(dt < 300){
+      const touch = e.changedTouches[0];
+      const pos = clientToCanvas(touch.clientX, touch.clientY);
+      const dx = pos.x - box.position.x;
+      const dy = pos.y - box.position.y;
+      const dist = Math.sqrt(dx*dx+dy*dy);
+
+      if(dist < boxSize/1.2){
+        gravityEnabled = !gravityEnabled;
+        toggleGravity();
+      }
+
+      lastTap = 0;
+      return;
+    }
+
+    lastTap = now;
+  });
+
+  // Right-click toggles gravity
+  canvas.addEventListener("contextmenu",(e)=>{
+    e.preventDefault();
+    const pos = clientToCanvas(e.clientX, e.clientY);
+    const dx = pos.x - box.position.x;
+    const dy = pos.y - box.position.y;
+    const dist = Math.sqrt(dx*dx+dy*dy);
+
+    if(dist < boxSize/1.2){
+      gravityEnabled = !gravityEnabled;
+      toggleGravity();
+    }
+  });
 
   // Play button: request fullscreen, attempt orientation lock (portrait-primary), fallback if needed, then start
   playButton.addEventListener("click",async()=>{
