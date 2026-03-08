@@ -82,11 +82,12 @@
   <script src="https://unpkg.com/matter-js@0.20.0/build/matter.min.js"></script>
 
   <script>
-  /* RealityBreaker
-     - portrait-primary lock + rotation fallback
-     - works on PC (no tilt on PC)
-     - custom pickup/drag that works with transforms
-     - when thrown with finger, the box bounces back
+  /*
+    RealityBreaker
+    - On PC: no tilt, mouse behaves like mobile touch (pick up, drag, throw, bounce-back)
+    - On mobile: touch drag/throw works as before, tilt enabled only on mobile
+    - Portrait lock attempt + rotation fallback
+    - Pointer coordinate mapping handles transforms
   */
 
   const playButton = document.getElementById('playButton');
@@ -333,27 +334,25 @@
     const vx = (pos.x - lastDragPos.x) / (dt / 1000); // px/s
     const vy = (pos.y - lastDragPos.y) / (dt / 1000); // px/s
 
-    // Apply a scaled velocity to the body
+    // Apply a scaled velocity to the body (throw)
     const velocityScale = 0.02;
     Body.setVelocity(box, { x: vx * velocityScale, y: vy * velocityScale });
 
-    // If the drag was done with a finger (touch), make it "bounce back"
-    if (dragPointerType === 'touch' || dragPointerType === 'pen') {
-      const speed = Math.sqrt(vx*vx + vy*vy);
-      const throwThreshold = 200; // px/s threshold to consider it a throw
-      if (speed > throwThreshold) {
-        // Temporarily increase restitution so it visibly bounces
-        const originalRest = box.restitution || 0.8;
-        box.restitution = Math.max(originalRest, 1.2);
+    // Bounce-back behavior: apply opposite impulse when thrown strongly
+    // Apply for both touch and mouse so PC behaves like mobile
+    const speed = Math.sqrt(vx*vx + vy*vy);
+    const throwThreshold = 200; // px/s threshold to consider it a throw
+    if (speed > throwThreshold) {
+      // Temporarily increase restitution for a visible bounce
+      const originalRest = box.restitution || 0.8;
+      box.restitution = Math.max(originalRest, 1.2);
 
-        // Apply a force opposite to the throw direction to push it back
-        // scale force relative to throw speed
-        const impulseScale = 0.0006; // tuned for feel
-        Body.applyForce(box, box.position, { x: -vx * impulseScale, y: -vy * impulseScale });
+      // Apply a force opposite to the throw direction to push it back
+      const impulseScale = 0.0006; // tuned for feel
+      Body.applyForce(box, box.position, { x: -vx * impulseScale, y: -vy * impulseScale });
 
-        // Restore restitution after a short time
-        setTimeout(() => { box.restitution = originalRest; }, 300);
-      }
+      // Restore restitution after a short time
+      setTimeout(() => { box.restitution = originalRest; }, 300);
     }
 
     isDragging = false;
@@ -364,7 +363,8 @@
 
   // Pointer events (works on PC and touch)
   document.addEventListener('pointerdown', (e) => {
-    if (e.pointerType === 'mouse' && e.button !== 0) return; // only left button
+    // allow left mouse button and touch/pen
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     const started = startDrag(e.pointerId, e.pointerType, e.clientX, e.clientY);
     if (started) {
       try { (e.target || document).setPointerCapture(e.pointerId); } catch (err) {}
