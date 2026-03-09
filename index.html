@@ -26,17 +26,6 @@
       touch-action:none;
     }
 
-    #debug{
-      position:fixed;
-      bottom:20px;
-      left:20px;
-      color:white;
-      font-size:18px;
-      text-shadow:0 0 5px black;
-      pointer-events:none;
-      z-index:9998;
-    }
-
     #playButton{
       position:fixed;
       top:50%;
@@ -57,22 +46,18 @@
 <body>
   <div id="playButton">▶ Play</div>
   <canvas id="world"></canvas>
-  <div id="debug">Reality Breaker ON</div>
 
   <script src="https://unpkg.com/matter-js@0.20.0/build/matter.min.js"></script>
   <script>
   /* RealityBreaker
      - Works on mobile and PC
      - No tilt on PC; tilt enabled only on mobile
-     - Picking up & holding (mouse or touch) behaves like the simple example:
-       while held the box follows the pointer; on release it receives a throw velocity
-       and on strong throws it bounces back slightly
+     - Picking up & holding (mouse or touch) follows pointer; on release it throws and can bounce back
      - Double-tap (touch) or right-click toggles gravity
   */
 
   const playButton = document.getElementById('playButton');
   const canvas = document.getElementById('world');
-  const debug = document.getElementById('debug');
 
   const { Engine, Render, World, Bodies, Runner, Mouse, MouseConstraint, Body, Events } = Matter;
 
@@ -157,13 +142,10 @@
     gravityEnabled = !gravityEnabled;
     if (gravityEnabled){
       engine.gravity.y = 1;
-      debug.textContent = "Gravity: ON";
     } else {
       engine.gravity.y = 0;
       Body.applyForce(box, box.position, { x:(Math.random()-0.5)*0.002, y:-0.01 });
-      debug.textContent = "Gravity: OFF";
     }
-    setTimeout(()=> debug.textContent = "Reality Breaker ON", 1200);
   }
 
   // pointer mapping (client -> canvas logical coords)
@@ -183,7 +165,7 @@
   });
   World.add(engine.world, mouseConstraint);
 
-  // interactive "smack" feedback (like original)
+  // interactive "smack" feedback (keeps original behavior without on-screen text)
   let lastMousePos = { x:0, y:0 };
   let interactive = false;
   const INTERACT_RADIUS = 180;
@@ -201,7 +183,6 @@
 
   function tryStartHold(pointerId, pointerType, clientX, clientY){
     const pos = clientToCanvas(clientX, clientY);
-    // convert box position to canvas pixel coords (render uses canvas pixel size)
     const boxCanvasPos = { x: box.position.x, y: box.position.y };
     const dx = pos.x - boxCanvasPos.x;
     const dy = pos.y - boxCanvasPos.y;
@@ -214,10 +195,7 @@
       holdOffset.y = pos.y - boxCanvasPos.y;
       lastHoldPos = pos;
       lastHoldTime = performance.now();
-      // while holding, zero velocity so it follows exactly
       Body.setVelocity(box, { x:0, y:0 });
-      // reduce gravity influence while holding
-      // keep engine.gravity as-is but we move the body directly
       return true;
     }
     return false;
@@ -228,7 +206,6 @@
     const pos = clientToCanvas(clientX, clientY);
     const targetX = pos.x - holdOffset.x;
     const targetY = pos.y - holdOffset.y;
-    // set position in world coordinates (canvas pixel coords match render)
     Body.setPosition(box, { x: targetX, y: targetY });
     Body.setVelocity(box, { x:0, y:0 });
     lastHoldPos = pos;
@@ -302,14 +279,11 @@
 
     if (!interactive && dist < INTERACT_RADIUS) {
       interactive = true;
-      debug.textContent = 'Near block: drag it or smack it';
     } else if (interactive && dist > EXIT_RADIUS) {
       interactive = false;
-      debug.textContent = 'Reality Breaker ON';
     }
 
     if (dist < INTERACT_RADIUS && speed > SPEED_THRESHOLD){
-      // apply small force based on screen movement; map to world by using same dx/dy scaled
       Body.applyForce(box, box.position, { x: dx * PUNCH_FORCE, y: dy * PUNCH_FORCE });
     }
   }, { passive:false });
@@ -340,7 +314,6 @@
     const dt = now - lastTap;
     if (dt < 300){
       const touch = e.changedTouches[0];
-      // compute distance to box in screen coords
       const rect = canvas.getBoundingClientRect();
       const boxScreenX = box.position.x * (rect.width / canvas.width) + rect.left;
       const boxScreenY = box.position.y * (rect.height / canvas.height) + rect.top;
@@ -348,7 +321,6 @@
       const dy = touch.clientY - boxScreenY;
       const dist = Math.sqrt(dx*dx + dy*dy);
       if (dist < boxSize / 1.2) {
-        gravityEnabled = !gravityEnabled;
         toggleGravity();
       }
       lastTap = 0;
@@ -367,7 +339,6 @@
     const dy = e.clientY - boxScreenY;
     const dist = Math.sqrt(dx*dx + dy*dy);
     if (dist < boxSize / 1.2) {
-      gravityEnabled = !gravityEnabled;
       toggleGravity();
     }
   });
