@@ -49,11 +49,12 @@
 
   <script src="https://unpkg.com/matter-js@0.20.0/build/matter.min.js"></script>
   <script>
-  /* RealityBreaker
-     - Works on mobile and PC
-     - No tilt on PC; tilt enabled only on mobile
-     - Picking up & holding (mouse or touch) follows pointer; on release it throws and can bounce back
-     - Double-tap (touch) or right-click toggles gravity
+  /*
+    RealityBreaker
+    - Works on mobile and PC
+    - No tilt on PC; tilt enabled only on mobile
+    - Picking up & holding (mouse or touch) follows pointer; on release it throws and can bounce back
+    - Strong throws bounce back; on mobile the box also bounces off borders
   */
 
   const playButton = document.getElementById('playButton');
@@ -97,10 +98,11 @@
     if (leftWall) World.remove(engine.world, leftWall);
     if (rightWall) World.remove(engine.world, rightWall);
 
-    ground = Bodies.rectangle(w/2, h + 250, w + 500, 500, { isStatic:true, render:{visible:false} });
-    ceiling = Bodies.rectangle(w/2, -250, w + 500, 500, { isStatic:true, render:{visible:false} });
-    leftWall = Bodies.rectangle(-250, h/2, 500, h + 500, { isStatic:true, render:{visible:false} });
-    rightWall = Bodies.rectangle(w + 250, h/2, 500, h + 500, { isStatic:true, render:{visible:false} });
+    // invisible thick walls for robust collisions
+    ground = Bodies.rectangle(w/2, h + 250, w + 500, 500, { isStatic:true, render:{visible:false}, label: 'wall' });
+    ceiling = Bodies.rectangle(w/2, -250, w + 500, 500, { isStatic:true, render:{visible:false}, label: 'wall' });
+    leftWall = Bodies.rectangle(-250, h/2, 500, h + 500, { isStatic:true, render:{visible:false}, label: 'wall' });
+    rightWall = Bodies.rectangle(w + 250, h/2, 500, h + 500, { isStatic:true, render:{visible:false}, label: 'wall' });
 
     World.add(engine.world, [ground, ceiling, leftWall, rightWall]);
   }
@@ -112,6 +114,7 @@
     restitution: 0.8,
     frictionAir: 0.01,
     friction: 0.001,
+    label: 'box',
     render: { fillStyle: '#0A013F' }
   });
   World.add(engine.world, box);
@@ -165,7 +168,7 @@
   });
   World.add(engine.world, mouseConstraint);
 
-  // interactive "smack" feedback (keeps original behavior without on-screen text)
+  // interactive "smack" feedback (keeps original behavior)
   let lastMousePos = { x:0, y:0 };
   let interactive = false;
   const INTERACT_RADIUS = 180;
@@ -340,6 +343,49 @@
     const dist = Math.sqrt(dx*dx + dy*dy);
     if (dist < boxSize / 1.2) {
       toggleGravity();
+    }
+  });
+
+  // bounce off walls on collision (mobile + PC). On mobile we make the bounce more pronounced.
+  Events.on(engine, 'collisionStart', (event) => {
+    const pairs = event.pairs;
+    for (let i = 0; i < pairs.length; i++){
+      const p = pairs[i];
+      const a = p.bodyA;
+      const b = p.bodyB;
+
+      // check if one is box and the other is a wall
+      if ((a.label === 'box' && b.label === 'wall') || (b.label === 'box' && a.label === 'wall')) {
+        // compute simple bounce: reflect velocity on collision normal
+        // Matter provides collision normal in pair.collision.normal (points from bodyA to bodyB)
+        const pair = p.collision;
+        if (!pair) continue;
+
+        // Determine which side is the wall relative to the box
+        // Use box current velocity and apply a reversed impulse along that direction
+        const vel = box.velocity;
+        const speed = Math.sqrt(vel.x*vel.x + vel.y*vel.y);
+
+        // If speed is small, give a small bounce to avoid sticking
+        if (speed < 0.5) {
+          const nudge = 0.02;
+          // push box slightly inward from the wall
+          Body.applyForce(box, box.position, { x: (Math.random()-0.5)*nudge, y: -nudge });
+          continue;
+        }
+
+        // stronger bounce on mobile to feel snappy against borders
+        const bounceMultiplier = isMobile ? 1.6 : 1.0;
+
+        // compute impulse opposite to current velocity
+        const impulseScale = 0.0008 * bounceMultiplier;
+        Body.applyForce(box, box.position, { x: -vel.x * impulseScale, y: -vel.y * impulseScale });
+
+        // temporarily increase restitution for visible bounce
+        const originalRest = box.restitution || 0.8;
+        box.restitution = Math.max(originalRest, 1.0 * bounceMultiplier);
+        setTimeout(() => { box.restitution = originalRest; }, 220);
+      }
     }
   });
 
