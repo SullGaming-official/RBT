@@ -50,13 +50,11 @@
   <script src="https://unpkg.com/matter-js@0.20.0/build/matter.min.js"></script>
   <script>
   /*
-    RealityBreaker - Final
-    - Works on PC and mobile
-    - No tilt on PC; tilt enabled only on mobile
-    - Pick up & hold (mouse or touch) follows pointer; on release it throws (mobile & PC)
-    - Strong throws bounce back; box bounces off borders on collision
-    - Power resource (0..100): moving drains power; near-stationary recharges power
-      Power scales throw strength, smack force, and bounce impulse
+    RealityBreaker - Updated
+    - Power only increases when you throw the box (no drain/recharge while moving)
+    - Throwing sets velocity so the box slides naturally (reduced air friction)
+    - Removed automatic bounce-back on throw so it slides; collisions with walls still bounce
+    - Works on PC and mobile; tilt only on mobile
   */
 
   const playButton = document.getElementById('playButton');
@@ -116,10 +114,11 @@
 
   // box
   const boxSize = 120;
+  // Lower air friction and surface friction so it slides when thrown
   let box = Bodies.rectangle(window.innerWidth/2, window.innerHeight/4, boxSize, boxSize, {
     restitution: 0.8,
-    frictionAir: 0.01,
-    friction: 0.001,
+    frictionAir: 0.001,   // very low air drag so it slides
+    friction: 0.0,        // surface friction
     label: 'box',
     render: { fillStyle: '#0A013F' }
   });
@@ -175,19 +174,15 @@
   const EXIT_RADIUS = 220;
   const SPEED_THRESHOLD = 8;
 
-  // POWER system
-  let power = 100; // 0..100
+  // POWER system: only increases when you throw the box
+  let power = 20; // starting power (0..100)
   const POWER_MIN = 0;
   const POWER_MAX = 100;
-  // drain/recharge tuning
-  const DRAIN_PER_SPEED = 0.02; // drain per px/s per second
-  const RECHARGE_RATE = 10; // power per second when nearly stationary
-  const NEAR_STATIONARY_SPEED = 1.5; // px/s threshold to consider stationary
 
-  // base forces (scaled by powerFactor)
-  const BASE_PUNCH_FORCE = 0.005;
-  const BASE_VELOCITY_SCALE = 0.02;
-  const BASE_IMPULSE_SCALE = 0.0006;
+  // tuning constants
+  const BASE_VELOCITY_SCALE = 0.02;    // base scale for throw velocity
+  const THROW_POWER_GAIN = 0.02;       // how much power gained per px/s of throw
+  const THROW_THRESHOLD = 200;         // px/s threshold to consider a throw
 
   // custom pickup/hold/throw behavior
   let holding = false;
@@ -211,6 +206,7 @@
       holdOffset.y = pos.y - boxCanvasPos.y;
       lastHoldPos = pos;
       lastHoldTime = performance.now();
+      // zero velocity while holding so it follows exactly
       Body.setVelocity(box, { x:0, y:0 });
       return true;
     }
@@ -236,24 +232,28 @@
     const vx = (pos.x - lastHoldPos.x) / (dt / 1000); // px/s
     const vy = (pos.y - lastHoldPos.y) / (dt / 1000); // px/s
 
-    // power factor 0..1
-    const powerFactor = Math.max(0.05, power / POWER_MAX);
+    // compute throw speed
+    const speed = Math.sqrt(vx*vx + vy*vy);
 
-    // apply throw velocity scaled by power
+    // power factor (0..1) used to slightly scale throw if desired
+    const powerFactor = Math.max(0.05, Math.min(1, power / POWER_MAX));
+
+    // Apply throw velocity scaled by powerFactor so it slides naturally
+    // Use setVelocity so it doesn't get immediately damped by forces
     const velocityScale = BASE_VELOCITY_SCALE * (0.5 + 0.5 * powerFactor);
     Body.setVelocity(box, { x: vx * velocityScale, y: vy * velocityScale });
 
-    // bounce-back on strong throws (both mobile & PC)
-    const speed = Math.sqrt(vx*vx + vy*vy);
-    const throwThreshold = 200; // px/s
-    if (speed > throwThreshold){
-      const originalRest = box.restitution || 0.8;
-      box.restitution = Math.max(originalRest, 1.0 + 0.5 * (1 - powerFactor)); // stronger bounce when low powerFactor? tuned
-      const impulseScale = BASE_IMPULSE_SCALE * (1 + (1 - powerFactor)); // scale by power
-      Body.applyForce(box, box.position, { x: -vx * impulseScale, y: -vy * impulseScale });
-      setTimeout(()=> { box.restitution = originalRest; }, 300);
+    // IMPORTANT: ensure low air friction so it slides (we set frictionAir low on creation)
+    // Do NOT apply an opposite impulse (no bounce-back on throw) — user requested sliding behavior.
+
+    // If this was a throw (speed above threshold), increase power
+    if (speed > THROW_THRESHOLD) {
+      const gain = speed * THROW_POWER_GAIN * 0.01; // tuned small gain
+      power = Math.min(POWER_MAX, power + gain);
+      // optional: cap and maybe visual feedback (not shown)
     }
 
+    // clear hold state
     holding = false;
     holdPointerId = null;
     holdPointerType = null;
@@ -280,7 +280,7 @@
       return;
     }
 
-    // otherwise, update "smack" behavior and power drain
+    // otherwise, update "smack" behavior (small pushes) — unchanged
     const mousePos = { x: e.clientX, y: e.clientY };
     const dx = mousePos.x - lastMousePos.x;
     const dy = mousePos.y - lastMousePos.y;
@@ -301,22 +301,9 @@
       interactive = false;
     }
 
-    // power drain from pointer movement near the box (if not holding)
-    if (!holding) {
-      // approximate pointer speed in px/s
-      const pointerSpeed = speed * 60; // rough conversion (frame-based)
-      if (pointerSpeed > NEAR_STATIONARY_SPEED) {
-        power = Math.max(POWER_MIN, power - (pointerSpeed * DRAIN_PER_SPEED * (1/60)));
-      } else {
-        // recharge when nearly stationary
-        power = Math.min(POWER_MAX, power + (RECHARGE_RATE * (1/60)));
-      }
-    }
-
-    // apply smack force scaled by power
     if (dist < INTERACT_RADIUS && speed > SPEED_THRESHOLD){
-      const powerFactor = Math.max(0.05, power / POWER_MAX);
-      const punchForce = BASE_PUNCH_FORCE * (0.4 + 0.6 * powerFactor);
+      // small smack force; scale by current power so low power = weaker smacks
+      const punchForce = 0.005 * Math.max(0.2, power / POWER_MAX);
       Body.applyForce(box, box.position, { x: dx * punchForce, y: dy * punchForce });
     }
   }, { passive:false });
@@ -376,7 +363,7 @@
     }
   });
 
-  // bounce off walls on collision (mobile + PC)
+  // bounce off walls on collision (mobile + PC) — keep this so it doesn't escape viewport
   Events.on(engine, 'collisionStart', (event) => {
     const pairs = event.pairs;
     for (let i = 0; i < pairs.length; i++){
@@ -394,10 +381,12 @@
           continue;
         }
 
-        const bounceMultiplier = isMobile ? 1.6 : 1.0;
-        const impulseScale = BASE_IMPULSE_SCALE * bounceMultiplier * (power / POWER_MAX + 0.2);
+        // apply a small bounce impulse so it doesn't stick to walls
+        const bounceMultiplier = isMobile ? 1.2 : 1.0;
+        const impulseScale = 0.0008 * bounceMultiplier;
         Body.applyForce(box, box.position, { x: -vel.x * impulseScale, y: -vel.y * impulseScale });
 
+        // temporarily increase restitution for visible bounce
         const originalRest = box.restitution || 0.8;
         box.restitution = Math.max(originalRest, 1.0 * bounceMultiplier);
         setTimeout(() => { box.restitution = originalRest; }, 220);
@@ -405,22 +394,9 @@
     }
   });
 
-  // power drain/recharge each tick based on box movement
-  Events.on(engine, 'afterUpdate', () => {
-    // compute box speed in px/s (approx)
-    const vx = box.velocity.x;
-    const vy = box.velocity.y;
-    const speed = Math.sqrt(vx*vx + vy*vy) * 60; // approximate px/s
-    if (speed > NEAR_STATIONARY_SPEED) {
-      power = Math.max(POWER_MIN, power - (speed * DRAIN_PER_SPEED * (1/60)));
-    } else {
-      power = Math.min(POWER_MAX, power + (RECHARGE_RATE * (1/60)));
-    }
-  });
-
   // clamp velocity
   Events.on(engine, 'beforeUpdate', () => {
-    const maxSpeed = 50;
+    const maxSpeed = 80; // allow higher top speed so it can slide
     let vx = box.velocity.x;
     let vy = box.velocity.y;
     if (vx > maxSpeed) vx = maxSpeed;
