@@ -31,11 +31,11 @@
       top:50%;
       left:50%;
       transform:translate(-50%,-50%);
-      padding:20px 40px;
+      padding:18px 36px;
       background:rgba(0,0,0,0.75);
       color:white;
-      font-size:32px;
-      border-radius:12px;
+      font-size:28px;
+      border-radius:10px;
       cursor:pointer;
       z-index:9999;
       user-select:none;
@@ -50,17 +50,18 @@
   <script src="https://unpkg.com/matter-js@0.20.0/build/matter.min.js"></script>
   <script>
   /*
-    RealityBreaker - Updated
-    - Power only increases when you throw the box (no drain/recharge while moving)
-    - Throwing sets velocity so the box slides naturally (reduced air friction)
-    - Removed automatic bounce-back on throw so it slides; collisions with walls still bounce
-    - Works on PC and mobile; tilt only on mobile
+    RealityBreaker - polished behavior:
+    - Mobile and PC behave the same when throwing: the box slides naturally after release.
+    - Power only increases when you perform a throw (strong release).
+    - Pointer handling is robust: mouse/touch won't get "stuck" holding the box after release.
+    - No MouseConstraint conflicts: custom pointer logic used for pickup/hold/throw.
+    - Walls bounce the box; sliding works on mobile and PC.
   */
 
   const playButton = document.getElementById('playButton');
   const canvas = document.getElementById('world');
 
-  const { Engine, Render, World, Bodies, Runner, Mouse, MouseConstraint, Body, Events } = Matter;
+  const { Engine, Render, World, Bodies, Runner, Body, Events } = Matter;
 
   // detect mobile
   const isMobile = /Mobi|Android|iPhone|iPad|iPod|Tablet/i.test(navigator.userAgent) || ('ontouchstart' in window && navigator.maxTouchPoints > 0);
@@ -79,7 +80,7 @@
     keepBoxInside();
   });
 
-  // engine + render
+  // Matter setup
   const engine = Engine.create();
   engine.gravity.y = 1;
 
@@ -102,7 +103,7 @@
     if (leftWall) World.remove(engine.world, leftWall);
     if (rightWall) World.remove(engine.world, rightWall);
 
-    // invisible thick walls for robust collisions
+    // thick invisible walls so collisions are robust
     ground = Bodies.rectangle(w/2, h + 250, w + 500, 500, { isStatic:true, render:{visible:false}, label: 'wall' });
     ceiling = Bodies.rectangle(w/2, -250, w + 500, 500, { isStatic:true, render:{visible:false}, label: 'wall' });
     leftWall = Bodies.rectangle(-250, h/2, 500, h + 500, { isStatic:true, render:{visible:false}, label: 'wall' });
@@ -112,9 +113,8 @@
   }
   createWalls();
 
-  // box
+  // box: low frictionAir and low friction so it slides naturally
   const boxSize = 120;
-  // Lower air friction and surface friction so it slides when thrown
   let box = Bodies.rectangle(window.innerWidth/2, window.innerHeight/4, boxSize, boxSize, {
     restitution: 0.8,
     frictionAir: 0.001,   // very low air drag so it slides
@@ -138,19 +138,14 @@
     Body.setVelocity(box, { x:0, y:0 });
   }
 
-  // gravity toggle
+  // gravity toggle (right-click or double-tap)
   let gravityEnabled = true;
   function toggleGravity(){
     gravityEnabled = !gravityEnabled;
-    if (gravityEnabled){
-      engine.gravity.y = 1;
-    } else {
-      engine.gravity.y = 0;
-      Body.applyForce(box, box.position, { x:(Math.random()-0.5)*0.002, y:-0.01 });
-    }
+    engine.gravity.y = gravityEnabled ? 1 : 0;
   }
 
-  // pointer mapping (client -> canvas logical coords)
+  // client -> canvas coords (canvas uses pixel size)
   function clientToCanvas(clientX, clientY){
     const rect = canvas.getBoundingClientRect();
     return {
@@ -159,32 +154,14 @@
     };
   }
 
-  // mouse constraint kept for clicks but custom pickup/throw implemented
-  const mouse = Mouse.create(canvas);
-  const mouseConstraint = MouseConstraint.create(engine, {
-    mouse: mouse,
-    constraint: { stiffness: 0.2, render: { visible: false } }
-  });
-  World.add(engine.world, mouseConstraint);
-
-  // interactive "smack" feedback
-  let lastMousePos = { x:0, y:0 };
-  let interactive = false;
-  const INTERACT_RADIUS = 180;
-  const EXIT_RADIUS = 220;
-  const SPEED_THRESHOLD = 8;
-
-  // POWER system: only increases when you throw the box
-  let power = 20; // starting power (0..100)
+  // POWER: only increases when you throw the box (strong release)
+  let power = 20; // 0..100
   const POWER_MIN = 0;
   const POWER_MAX = 100;
+  const THROW_POWER_GAIN = 0.02;   // gain per px/s (tuned)
+  const THROW_THRESHOLD = 200;     // px/s threshold to count as a throw
 
-  // tuning constants
-  const BASE_VELOCITY_SCALE = 0.02;    // base scale for throw velocity
-  const THROW_POWER_GAIN = 0.02;       // how much power gained per px/s of throw
-  const THROW_THRESHOLD = 200;         // px/s threshold to consider a throw
-
-  // custom pickup/hold/throw behavior
+  // pickup/hold/throw state
   let holding = false;
   let holdPointerId = null;
   let holdPointerType = null;
@@ -192,22 +169,26 @@
   let lastHoldPos = null;
   let lastHoldTime = 0;
 
+  // helper: distance between two points
+  function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+
+  // Start holding only if pointer is over the box and no other pointer is holding
   function tryStartHold(pointerId, pointerType, clientX, clientY){
+    if (holding) return false; // already held by another pointer
     const pos = clientToCanvas(clientX, clientY);
-    const boxCanvasPos = { x: box.position.x, y: box.position.y };
-    const dx = pos.x - boxCanvasPos.x;
-    const dy = pos.y - boxCanvasPos.y;
-    const dist = Math.sqrt(dx*dx + dy*dy);
-    if (dist <= boxSize * 0.7){
+    const boxPos = { x: box.position.x, y: box.position.y };
+    const d = dist(pos, boxPos);
+    if (d <= boxSize * 0.7){
       holding = true;
       holdPointerId = pointerId;
       holdPointerType = pointerType;
-      holdOffset.x = pos.x - boxCanvasPos.x;
-      holdOffset.y = pos.y - boxCanvasPos.y;
+      holdOffset.x = pos.x - boxPos.x;
+      holdOffset.y = pos.y - boxPos.y;
       lastHoldPos = pos;
       lastHoldTime = performance.now();
       // zero velocity while holding so it follows exactly
       Body.setVelocity(box, { x:0, y:0 });
+      // slightly reduce gravity influence while holding so it feels "picked up"
       return true;
     }
     return false;
@@ -218,6 +199,7 @@
     const pos = clientToCanvas(clientX, clientY);
     const targetX = pos.x - holdOffset.x;
     const targetY = pos.y - holdOffset.y;
+    // set position directly so it follows pointer precisely
     Body.setPosition(box, { x: targetX, y: targetY });
     Body.setVelocity(box, { x:0, y:0 });
     lastHoldPos = pos;
@@ -233,75 +215,69 @@
     const vy = (pos.y - lastHoldPos.y) / (dt / 1000); // px/s
 
     // compute throw speed
-    const speed = Math.sqrt(vx*vx + vy*vy);
+    const speed = Math.hypot(vx, vy);
 
-    // power factor (0..1) used to slightly scale throw if desired
-    const powerFactor = Math.max(0.05, Math.min(1, power / POWER_MAX));
-
-    // Apply throw velocity scaled by powerFactor so it slides naturally
-    // Use setVelocity so it doesn't get immediately damped by forces
-    const velocityScale = BASE_VELOCITY_SCALE * (0.5 + 0.5 * powerFactor);
+    // apply throw velocity so it slides naturally
+    // scale down to world units; allow higher top speed so sliding is visible
+    const velocityScale = 0.02; // tuned for feel
     Body.setVelocity(box, { x: vx * velocityScale, y: vy * velocityScale });
 
-    // IMPORTANT: ensure low air friction so it slides (we set frictionAir low on creation)
-    // Do NOT apply an opposite impulse (no bounce-back on throw) — user requested sliding behavior.
-
-    // If this was a throw (speed above threshold), increase power
+    // If this was a throw (strong release), increase power
     if (speed > THROW_THRESHOLD) {
       const gain = speed * THROW_POWER_GAIN * 0.01; // tuned small gain
       power = Math.min(POWER_MAX, power + gain);
-      // optional: cap and maybe visual feedback (not shown)
     }
 
-    // clear hold state
+    // clear hold state and release pointer capture if possible
+    try {
+      // release pointer capture on the element that had it
+      // we don't know the original target reliably here, but attempt on document
+      document.releasePointerCapture && document.releasePointerCapture(holdPointerId);
+    } catch (e) {}
     holding = false;
     holdPointerId = null;
     holdPointerType = null;
     lastHoldPos = null;
   }
 
-  // pointer events: unify mouse & touch behavior
+  // Pointer handling: robust across mouse & touch
   document.addEventListener('pointerdown', (e) => {
-    // only left mouse button
+    // only left mouse button for mouse
     if (e.pointerType === 'mouse' && e.button !== 0) return;
 
+    // Try to start hold. If started, capture pointer on the event target.
     const started = tryStartHold(e.pointerId, e.pointerType, e.clientX, e.clientY);
-    if (started){
+    if (started) {
       try { (e.target || document).setPointerCapture(e.pointerId); } catch (err) {}
       e.preventDefault();
     }
   }, { passive:false });
 
   document.addEventListener('pointermove', (e) => {
-    // if holding with this pointer, move the box
-    if (holding && e.pointerId === holdPointerId){
+    // If holding with this pointer, move the box
+    if (holding && e.pointerId === holdPointerId) {
       moveHold(e.clientX, e.clientY);
       e.preventDefault();
       return;
     }
 
-    // otherwise, update "smack" behavior (small pushes) — unchanged
-    const mousePos = { x: e.clientX, y: e.clientY };
-    const dx = mousePos.x - lastMousePos.x;
-    const dy = mousePos.y - lastMousePos.y;
-    const speed = Math.sqrt(dx*dx + dy*dy);
-    lastMousePos = mousePos;
-
-    // compute distance in screen coords between pointer and box (box.position is in canvas pixels)
+    // Otherwise, allow quick "smack" pushes when pointer moves fast near the box
     const rect = canvas.getBoundingClientRect();
     const boxScreenX = box.position.x * (rect.width / canvas.width) + rect.left;
     const boxScreenY = box.position.y * (rect.height / canvas.height) + rect.top;
+    const dx = e.clientX - (window._rb_lastMouseX || e.clientX);
+    const dy = e.clientY - (window._rb_lastMouseY || e.clientY);
+    const speed = Math.hypot(dx, dy);
+    window._rb_lastMouseX = e.clientX;
+    window._rb_lastMouseY = e.clientY;
+
     const distX = e.clientX - boxScreenX;
     const distY = e.clientY - boxScreenY;
-    const dist = Math.sqrt(distX*distX + distY*distY);
+    const distToBox = Math.hypot(distX, distY);
 
-    if (!interactive && dist < INTERACT_RADIUS) {
-      interactive = true;
-    } else if (interactive && dist > EXIT_RADIUS) {
-      interactive = false;
-    }
-
-    if (dist < INTERACT_RADIUS && speed > SPEED_THRESHOLD){
+    const INTERACT_RADIUS = 180;
+    const SPEED_THRESHOLD = 8;
+    if (distToBox < INTERACT_RADIUS && speed > SPEED_THRESHOLD) {
       // small smack force; scale by current power so low power = weaker smacks
       const punchForce = 0.005 * Math.max(0.2, power / POWER_MAX);
       Body.applyForce(box, box.position, { x: dx * punchForce, y: dy * punchForce });
@@ -309,7 +285,7 @@
   }, { passive:false });
 
   document.addEventListener('pointerup', (e) => {
-    if (holding && e.pointerId === holdPointerId){
+    if (holding && e.pointerId === holdPointerId) {
       endHold(e.clientX, e.clientY);
       try { (e.target || document).releasePointerCapture(e.pointerId); } catch (err) {}
       e.preventDefault();
@@ -317,7 +293,7 @@
   }, { passive:false });
 
   document.addEventListener('pointercancel', (e) => {
-    if (holding && e.pointerId === holdPointerId){
+    if (holding && e.pointerId === holdPointerId) {
       // cancel hold without throw
       holding = false;
       holdPointerId = null;
@@ -327,22 +303,20 @@
     }
   }, { passive:false });
 
-  // double-tap (touch) toggles gravity
+  // double-tap toggles gravity (touch)
   let lastTap = 0;
   canvas.addEventListener('touchend', (e) => {
     const now = Date.now();
     const dt = now - lastTap;
-    if (dt < 300){
+    if (dt < 300) {
       const touch = e.changedTouches[0];
       const rect = canvas.getBoundingClientRect();
       const boxScreenX = box.position.x * (rect.width / canvas.width) + rect.left;
       const boxScreenY = box.position.y * (rect.height / canvas.height) + rect.top;
       const dx = touch.clientX - boxScreenX;
       const dy = touch.clientY - boxScreenY;
-      const dist = Math.sqrt(dx*dx + dy*dy);
-      if (dist < boxSize / 1.2) {
-        toggleGravity();
-      }
+      const distToBox = Math.hypot(dx, dy);
+      if (distToBox < boxSize / 1.2) toggleGravity();
       lastTap = 0;
       return;
     }
@@ -357,36 +331,29 @@
     const boxScreenY = box.position.y * (rect.height / canvas.height) + rect.top;
     const dx = e.clientX - boxScreenX;
     const dy = e.clientY - boxScreenY;
-    const dist = Math.sqrt(dx*dx + dy*dy);
-    if (dist < boxSize / 1.2) {
-      toggleGravity();
-    }
+    const distToBox = Math.hypot(dx, dy);
+    if (distToBox < boxSize / 1.2) toggleGravity();
   });
 
-  // bounce off walls on collision (mobile + PC) — keep this so it doesn't escape viewport
+  // bounce off walls on collision so it doesn't escape viewport
   Events.on(engine, 'collisionStart', (event) => {
     const pairs = event.pairs;
     for (let i = 0; i < pairs.length; i++){
       const p = pairs[i];
       const a = p.bodyA;
       const b = p.bodyB;
-
       if ((a.label === 'box' && b.label === 'wall') || (b.label === 'box' && a.label === 'wall')) {
         const vel = box.velocity;
-        const speed = Math.sqrt(vel.x*vel.x + vel.y*vel.y);
-
+        const speed = Math.hypot(vel.x, vel.y);
         if (speed < 0.5) {
           const nudge = 0.02;
           Body.applyForce(box, box.position, { x: (Math.random()-0.5)*nudge, y: -nudge });
           continue;
         }
-
-        // apply a small bounce impulse so it doesn't stick to walls
+        // small bounce impulse so it doesn't stick to walls
         const bounceMultiplier = isMobile ? 1.2 : 1.0;
         const impulseScale = 0.0008 * bounceMultiplier;
         Body.applyForce(box, box.position, { x: -vel.x * impulseScale, y: -vel.y * impulseScale });
-
-        // temporarily increase restitution for visible bounce
         const originalRest = box.restitution || 0.8;
         box.restitution = Math.max(originalRest, 1.0 * bounceMultiplier);
         setTimeout(() => { box.restitution = originalRest; }, 220);
@@ -394,9 +361,9 @@
     }
   });
 
-  // clamp velocity
+  // clamp velocity (allow higher top speed so sliding is visible)
   Events.on(engine, 'beforeUpdate', () => {
-    const maxSpeed = 80; // allow higher top speed so it can slide
+    const maxSpeed = 120;
     let vx = box.velocity.x;
     let vy = box.velocity.y;
     if (vx > maxSpeed) vx = maxSpeed;
@@ -413,9 +380,9 @@
     Render.run(render);
   }
 
-  // device tilt only on mobile
+  // device tilt only on mobile (optional)
   async function startMotion(){
-    if (!isMobile) return; // no tilt on PC
+    if (!isMobile) return;
     if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function"){
       try {
         const permission = await DeviceMotionEvent.requestPermission();
@@ -433,7 +400,7 @@
     });
   }
 
-  // play button: fullscreen then start
+  // play button: request fullscreen then start
   playButton.addEventListener('click', async () => {
     const el = document.documentElement;
     try {
