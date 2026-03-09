@@ -50,11 +50,13 @@
   <script src="https://unpkg.com/matter-js@0.20.0/build/matter.min.js"></script>
   <script>
   /*
-    RealityBreaker
-    - Works on mobile and PC
+    RealityBreaker - Final
+    - Works on PC and mobile
     - No tilt on PC; tilt enabled only on mobile
-    - Picking up & holding (mouse or touch) follows pointer; on release it throws and can bounce back
-    - Strong throws bounce back; on mobile the box also bounces off borders
+    - Pick up & hold (mouse or touch) follows pointer; on release it throws (mobile & PC)
+    - Strong throws bounce back; box bounces off borders on collision
+    - Power resource (0..100): moving drains power; near-stationary recharges power
+      Power scales throw strength, smack force, and bounce impulse
   */
 
   const playButton = document.getElementById('playButton');
@@ -73,7 +75,11 @@
     canvas.style.height = window.innerHeight + 'px';
   }
   resizeCanvas();
-  window.addEventListener('resize', resizeCanvas);
+  window.addEventListener('resize', () => {
+    resizeCanvas();
+    createWalls();
+    keepBoxInside();
+  });
 
   // engine + render
   const engine = Engine.create();
@@ -133,12 +139,6 @@
     Body.setVelocity(box, { x:0, y:0 });
   }
 
-  window.addEventListener('resize', () => {
-    resizeCanvas();
-    createWalls();
-    keepBoxInside();
-  });
-
   // gravity toggle
   let gravityEnabled = true;
   function toggleGravity(){
@@ -160,7 +160,7 @@
     };
   }
 
-  // mouse constraint kept for clicks but we implement custom pickup to match simple example
+  // mouse constraint kept for clicks but custom pickup/throw implemented
   const mouse = Mouse.create(canvas);
   const mouseConstraint = MouseConstraint.create(engine, {
     mouse: mouse,
@@ -168,15 +168,28 @@
   });
   World.add(engine.world, mouseConstraint);
 
-  // interactive "smack" feedback (keeps original behavior)
+  // interactive "smack" feedback
   let lastMousePos = { x:0, y:0 };
   let interactive = false;
   const INTERACT_RADIUS = 180;
   const EXIT_RADIUS = 220;
   const SPEED_THRESHOLD = 8;
-  const PUNCH_FORCE = 0.005;
 
-  // custom pickup/hold/throw behavior (works for mouse & touch)
+  // POWER system
+  let power = 100; // 0..100
+  const POWER_MIN = 0;
+  const POWER_MAX = 100;
+  // drain/recharge tuning
+  const DRAIN_PER_SPEED = 0.02; // drain per px/s per second
+  const RECHARGE_RATE = 10; // power per second when nearly stationary
+  const NEAR_STATIONARY_SPEED = 1.5; // px/s threshold to consider stationary
+
+  // base forces (scaled by powerFactor)
+  const BASE_PUNCH_FORCE = 0.005;
+  const BASE_VELOCITY_SCALE = 0.02;
+  const BASE_IMPULSE_SCALE = 0.0006;
+
+  // custom pickup/hold/throw behavior
   let holding = false;
   let holdPointerId = null;
   let holdPointerType = null;
@@ -223,17 +236,20 @@
     const vx = (pos.x - lastHoldPos.x) / (dt / 1000); // px/s
     const vy = (pos.y - lastHoldPos.y) / (dt / 1000); // px/s
 
-    // apply throw velocity scaled down to world units
-    const velocityScale = 0.02;
+    // power factor 0..1
+    const powerFactor = Math.max(0.05, power / POWER_MAX);
+
+    // apply throw velocity scaled by power
+    const velocityScale = BASE_VELOCITY_SCALE * (0.5 + 0.5 * powerFactor);
     Body.setVelocity(box, { x: vx * velocityScale, y: vy * velocityScale });
 
-    // bounce-back on strong throws (same behavior on PC & mobile)
+    // bounce-back on strong throws (both mobile & PC)
     const speed = Math.sqrt(vx*vx + vy*vy);
     const throwThreshold = 200; // px/s
     if (speed > throwThreshold){
       const originalRest = box.restitution || 0.8;
-      box.restitution = Math.max(originalRest, 1.2);
-      const impulseScale = 0.0006;
+      box.restitution = Math.max(originalRest, 1.0 + 0.5 * (1 - powerFactor)); // stronger bounce when low powerFactor? tuned
+      const impulseScale = BASE_IMPULSE_SCALE * (1 + (1 - powerFactor)); // scale by power
       Body.applyForce(box, box.position, { x: -vx * impulseScale, y: -vy * impulseScale });
       setTimeout(()=> { box.restitution = originalRest; }, 300);
     }
@@ -249,7 +265,6 @@
     // only left mouse button
     if (e.pointerType === 'mouse' && e.button !== 0) return;
 
-    // try to start hold; if started, capture pointer
     const started = tryStartHold(e.pointerId, e.pointerType, e.clientX, e.clientY);
     if (started){
       try { (e.target || document).setPointerCapture(e.pointerId); } catch (err) {}
@@ -265,7 +280,7 @@
       return;
     }
 
-    // otherwise, update "smack" behavior (like original)
+    // otherwise, update "smack" behavior and power drain
     const mousePos = { x: e.clientX, y: e.clientY };
     const dx = mousePos.x - lastMousePos.x;
     const dy = mousePos.y - lastMousePos.y;
@@ -286,8 +301,23 @@
       interactive = false;
     }
 
+    // power drain from pointer movement near the box (if not holding)
+    if (!holding) {
+      // approximate pointer speed in px/s
+      const pointerSpeed = speed * 60; // rough conversion (frame-based)
+      if (pointerSpeed > NEAR_STATIONARY_SPEED) {
+        power = Math.max(POWER_MIN, power - (pointerSpeed * DRAIN_PER_SPEED * (1/60)));
+      } else {
+        // recharge when nearly stationary
+        power = Math.min(POWER_MAX, power + (RECHARGE_RATE * (1/60)));
+      }
+    }
+
+    // apply smack force scaled by power
     if (dist < INTERACT_RADIUS && speed > SPEED_THRESHOLD){
-      Body.applyForce(box, box.position, { x: dx * PUNCH_FORCE, y: dy * PUNCH_FORCE });
+      const powerFactor = Math.max(0.05, power / POWER_MAX);
+      const punchForce = BASE_PUNCH_FORCE * (0.4 + 0.6 * powerFactor);
+      Body.applyForce(box, box.position, { x: dx * punchForce, y: dy * punchForce });
     }
   }, { passive:false });
 
@@ -346,7 +376,7 @@
     }
   });
 
-  // bounce off walls on collision (mobile + PC). On mobile we make the bounce more pronounced.
+  // bounce off walls on collision (mobile + PC)
   Events.on(engine, 'collisionStart', (event) => {
     const pairs = event.pairs;
     for (let i = 0; i < pairs.length; i++){
@@ -354,38 +384,37 @@
       const a = p.bodyA;
       const b = p.bodyB;
 
-      // check if one is box and the other is a wall
       if ((a.label === 'box' && b.label === 'wall') || (b.label === 'box' && a.label === 'wall')) {
-        // compute simple bounce: reflect velocity on collision normal
-        // Matter provides collision normal in pair.collision.normal (points from bodyA to bodyB)
-        const pair = p.collision;
-        if (!pair) continue;
-
-        // Determine which side is the wall relative to the box
-        // Use box current velocity and apply a reversed impulse along that direction
         const vel = box.velocity;
         const speed = Math.sqrt(vel.x*vel.x + vel.y*vel.y);
 
-        // If speed is small, give a small bounce to avoid sticking
         if (speed < 0.5) {
           const nudge = 0.02;
-          // push box slightly inward from the wall
           Body.applyForce(box, box.position, { x: (Math.random()-0.5)*nudge, y: -nudge });
           continue;
         }
 
-        // stronger bounce on mobile to feel snappy against borders
         const bounceMultiplier = isMobile ? 1.6 : 1.0;
-
-        // compute impulse opposite to current velocity
-        const impulseScale = 0.0008 * bounceMultiplier;
+        const impulseScale = BASE_IMPULSE_SCALE * bounceMultiplier * (power / POWER_MAX + 0.2);
         Body.applyForce(box, box.position, { x: -vel.x * impulseScale, y: -vel.y * impulseScale });
 
-        // temporarily increase restitution for visible bounce
         const originalRest = box.restitution || 0.8;
         box.restitution = Math.max(originalRest, 1.0 * bounceMultiplier);
         setTimeout(() => { box.restitution = originalRest; }, 220);
       }
+    }
+  });
+
+  // power drain/recharge each tick based on box movement
+  Events.on(engine, 'afterUpdate', () => {
+    // compute box speed in px/s (approx)
+    const vx = box.velocity.x;
+    const vy = box.velocity.y;
+    const speed = Math.sqrt(vx*vx + vy*vy) * 60; // approximate px/s
+    if (speed > NEAR_STATIONARY_SPEED) {
+      power = Math.max(POWER_MIN, power - (speed * DRAIN_PER_SPEED * (1/60)));
+    } else {
+      power = Math.min(POWER_MAX, power + (RECHARGE_RATE * (1/60)));
     }
   });
 
