@@ -1,390 +1,383 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>RealityBreaker</title>
-  <style>
-    html,body{
-      margin:0;
-      padding:0;
-      height:100%;
-      background:transparent;
-      -webkit-user-select:none;
-      user-select:none;
-      touch-action:none;
-      overflow:hidden;
-      font-family:Arial, sans-serif;
-    }
+<meta charset="UTF-8">
+<title>RealityBreaker</title>
 
-    #world{
-      position:absolute;
-      top:0;
-      left:0;
-      display:block;
-      background:transparent;
-      touch-action:none;
-    }
+<style>
+body{
+margin:0;
+overflow:hidden;
+background:transparent;
+}
 
-    #playButton{
-      position:fixed;
-      top:50%;
-      left:50%;
-      transform:translate(-50%,-50%);
-      padding:18px 36px;
-      background:rgba(0,0,0,0.75);
-      color:white;
-      font-size:28px;
-      border-radius:10px;
-      cursor:pointer;
-      z-index:9999;
-      user-select:none;
-      touch-action:manipulation;
-    }
-  </style>
+#world{
+position:absolute;
+top:0;
+left:0;
+}
+
+#debug{
+position:fixed;
+bottom:20px;
+left:20px;
+color:white;
+font-family:Arial,sans-serif;
+font-size:18px;
+text-shadow:0 0 5px black;
+pointer-events:none;
+}
+
+#playButton{
+position:fixed;
+top:50%;
+left:50%;
+transform:translate(-50%,-50%);
+padding:20px 40px;
+background:rgba(0,0,0,0.7);
+color:white;
+font-size:32px;
+font-family:Arial,sans-serif;
+border-radius:12px;
+cursor:pointer;
+z-index:9999;
+user-select:none;
+}
+</style>
 </head>
+
 <body>
-  <div id="playButton">▶ Play</div>
-  <canvas id="world"></canvas>
 
-  <script src="https://unpkg.com/matter-js@0.20.0/build/matter.min.js"></script>
-  <script>
-  /*
-    Behavior summary:
-    - PC: you can pick up and continuously hold the block (it will not drop while stationary).
-    - Mobile: when you release after a throw the block will SLIDE (setVelocity + low frictionAir).
-    - No MouseConstraint is used to avoid conflicts; pointer capture is used so holding persists.
-    - Power increases only when you perform a strong throw (kept but minimal).
-  */
+<div id="playButton">▶ Play</div>
 
-  const playButton = document.getElementById('playButton');
-  const canvas = document.getElementById('world');
+<canvas id="world"></canvas>
+<div id="debug">Reality Breaker ON</div>
 
-  const { Engine, Render, World, Bodies, Runner, Body, Events } = Matter;
+<script src="https://unpkg.com/matter-js@0.20.0/build/matter.min.js"></script>
 
-  const isMobile = /Mobi|Android|iPhone|iPad|iPod|Tablet/i.test(navigator.userAgent) || ('ontouchstart' in window && navigator.maxTouchPoints > 0);
+<script>
 
-  function resizeCanvas(){
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    canvas.style.width = window.innerWidth + 'px';
-    canvas.style.height = window.innerHeight + 'px';
-  }
-  resizeCanvas();
-  window.addEventListener('resize', () => {
-    resizeCanvas();
-    createWalls();
-    keepBoxInside();
-  });
+const playButton=document.getElementById("playButton");
 
-  const engine = Engine.create();
-  engine.gravity.y = 1;
+playButton.addEventListener("click",async()=>{
 
-  const render = Render.create({
-    canvas: canvas,
-    engine: engine,
-    options: { wireframes:false, background:'transparent' }
-  });
+const el=document.documentElement;
 
-  // Walls
-  let ground, ceiling, leftWall, rightWall;
-  function createWalls(){
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    if (ground) World.remove(engine.world, ground);
-    if (ceiling) World.remove(engine.world, ceiling);
-    if (leftWall) World.remove(engine.world, leftWall);
-    if (rightWall) World.remove(engine.world, rightWall);
+if(el.requestFullscreen) await el.requestFullscreen();
+else if(el.webkitRequestFullscreen) await el.webkitRequestFullscreen();
+else if(el.msRequestFullscreen) await el.msRequestFullscreen();
 
-    ground = Bodies.rectangle(w/2, h + 250, w + 500, 500, { isStatic:true, render:{visible:false}, label:'wall' });
-    ceiling = Bodies.rectangle(w/2, -250, w + 500, 500, { isStatic:true, render:{visible:false}, label:'wall' });
-    leftWall = Bodies.rectangle(-250, h/2, 500, h + 500, { isStatic:true, render:{visible:false}, label:'wall' });
-    rightWall = Bodies.rectangle(w + 250, h/2, 500, h + 500, { isStatic:true, render:{visible:false}, label:'wall' });
+if(screen.orientation && screen.orientation.lock){
+try{
+await screen.orientation.lock("portrait-primary");
+}catch(e){}
+}
 
-    World.add(engine.world, [ground, ceiling, leftWall, rightWall]);
-  }
-  createWalls();
+enableTiltControls();
 
-  // Box: low frictionAir and low friction so it slides on both platforms
-  const boxSize = 120;
-  let box = Bodies.rectangle(window.innerWidth/2, window.innerHeight/4, boxSize, boxSize, {
-    restitution: 0.8,
-    frictionAir: 0.001,
-    friction: 0.0,
-    label: 'box',
-    render: { fillStyle: '#0A013F' }
-  });
-  World.add(engine.world, box);
+playButton.style.display="none";
+startGame();
 
-  function keepBoxInside(){
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    const half = boxSize/2;
-    let x = box.position.x;
-    let y = box.position.y;
-    if (x < half) x = half;
-    if (x > w-half) x = w-half;
-    if (y < half) y = half;
-    if (y > h-half) y = h-half;
-    Body.setPosition(box, { x, y });
-    Body.setVelocity(box, { x:0, y:0 });
-  }
+});
 
-  // Gravity toggle
-  let gravityEnabled = true;
-  function toggleGravity(){ engine.gravity.y = gravityEnabled ? 0 : 1; gravityEnabled = !gravityEnabled; }
+const{
+Engine,
+Render,
+World,
+Bodies,
+Runner,
+Mouse,
+MouseConstraint,
+Body,
+Events
+}=Matter;
 
-  // Convert client coords to canvas pixel coords
-  function clientToCanvas(clientX, clientY){
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: (clientX - rect.left) * (canvas.width / rect.width),
-      y: (clientY - rect.top) * (canvas.height / rect.height)
-    };
-  }
+const canvas=document.getElementById("world");
+const debug=document.getElementById("debug");
 
-  // Power (only increases on strong throw)
-  let power = 20;
-  const POWER_MAX = 100;
-  const THROW_POWER_GAIN = 0.02;
-  const THROW_THRESHOLD = 200; // px/s
+function resizeCanvas(){
+canvas.width=window.innerWidth;
+canvas.height=window.innerHeight;
+}
+resizeCanvas();
 
-  // Holding state
-  let holding = false;
-  let holdPointerId = null;
-  let holdPointerType = null;
-  let holdOffset = { x:0, y:0 };
-  let lastHoldPos = null;
-  let lastHoldTime = 0;
+const engine=Engine.create();
+engine.gravity.y=1;
 
-  function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+const render=Render.create({
+canvas:canvas,
+engine:engine,
+options:{
+wireframes:false,
+background:"transparent"
+}
+});
 
-  // Start hold: capture pointer on canvas so we keep receiving events
-  function tryStartHold(pointerId, pointerType, clientX, clientY, target){
-    if (holding) return false;
-    const pos = clientToCanvas(clientX, clientY);
-    const boxPos = { x: box.position.x, y: box.position.y };
-    if (dist(pos, boxPos) <= boxSize * 0.7){
-      holding = true;
-      holdPointerId = pointerId;
-      holdPointerType = pointerType;
-      holdOffset.x = pos.x - boxPos.x;
-      holdOffset.y = pos.y - boxPos.y;
-      lastHoldPos = pos;
-      lastHoldTime = performance.now();
-      Body.setVelocity(box, { x:0, y:0 });
-      // capture pointer on canvas (preferred) or on target
-      try {
-        if (target && target.setPointerCapture) target.setPointerCapture(pointerId);
-        else if (canvas.setPointerCapture) canvas.setPointerCapture(pointerId);
-      } catch (e) {}
-      return true;
-    }
-    return false;
-  }
+let ground,ceiling,leftWall,rightWall;
 
-  // Move while holding: always follow pointer exactly (no auto-release)
-  function moveHold(clientX, clientY){
-    if (!holding) return;
-    const pos = clientToCanvas(clientX, clientY);
-    const targetX = pos.x - holdOffset.x;
-    const targetY = pos.y - holdOffset.y;
-    Body.setPosition(box, { x: targetX, y: targetY });
-    Body.setVelocity(box, { x:0, y:0 });
-    lastHoldPos = pos;
-    lastHoldTime = performance.now();
-  }
+function createWalls(){
 
-  // End hold: compute release velocity and set it so the box slides
-  function endHold(clientX, clientY, releaseTarget){
-    if (!holding) return;
-    const now = performance.now();
-    const pos = clientToCanvas(clientX, clientY);
-    const dt = Math.max(1, now - lastHoldTime); // ms
-    const vx = (pos.x - lastHoldPos.x) / (dt / 1000); // px/s
-    const vy = (pos.y - lastHoldPos.y) / (dt / 1000); // px/s
-    const speed = Math.hypot(vx, vy);
+const w=window.innerWidth;
+const h=window.innerHeight;
 
-    // Set velocity so it slides naturally on both mobile and PC
-    // Tuned scale for feel; increase so mobile sliding matches PC
-    const velocityScale = 0.035;
-    Body.setVelocity(box, { x: vx * velocityScale, y: vy * velocityScale });
+ground=Bodies.rectangle(w/2,h+250,w+500,500,{isStatic:true,render:{visible:false}});
+ceiling=Bodies.rectangle(w/2,-250,w+500,500,{isStatic:true,render:{visible:false}});
+leftWall=Bodies.rectangle(-250,h/2,500,h+500,{isStatic:true,render:{visible:false}});
+rightWall=Bodies.rectangle(w+250,h/2,500,h+500,{isStatic:true,render:{visible:false}});
 
-    // Increase power only on strong throws
-    if (speed > THROW_THRESHOLD) {
-      const gain = speed * THROW_POWER_GAIN * 0.01;
-      power = Math.min(POWER_MAX, power + gain);
-    }
+World.add(engine.world,[ground,ceiling,leftWall,rightWall]);
 
-    // release pointer capture
-    try {
-      if (releaseTarget && releaseTarget.releasePointerCapture) releaseTarget.releasePointerCapture(holdPointerId);
-      else if (canvas.releasePointerCapture) canvas.releasePointerCapture(holdPointerId);
-    } catch (e) {}
+}
 
-    holding = false;
-    holdPointerId = null;
-    holdPointerType = null;
-    lastHoldPos = null;
-  }
+createWalls();
 
-  // Pointer handling
-  // Use canvas pointerdown to start hold and document pointermove/up to ensure continuity
-  canvas.addEventListener('pointerdown', (e) => {
-    // only left mouse button for mouse
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    const started = tryStartHold(e.pointerId, e.pointerType, e.clientX, e.clientY, e.target);
-    if (started) e.preventDefault();
-  }, { passive:false });
+const boxSize=120;
 
-  document.addEventListener('pointermove', (e) => {
-    if (holding && e.pointerId === holdPointerId) {
-      // follow pointer exactly; will not drop if stationary
-      moveHold(e.clientX, e.clientY);
-      e.preventDefault();
-      return;
-    }
+const box=Bodies.rectangle(
+window.innerWidth/2,
+window.innerHeight/4,
+boxSize,
+boxSize,
+{
+restitution:0.8,
+frictionAir:0.01,
+friction:0.001,
+render:{fillStyle:"#0A013F"}
+}
+);
 
-    // quick "smack" behavior when not holding
-    const rect = canvas.getBoundingClientRect();
-    const boxScreenX = box.position.x * (rect.width / canvas.width) + rect.left;
-    const boxScreenY = box.position.y * (rect.height / canvas.height) + rect.top;
-    const dx = e.clientX - (window._rb_lastMouseX || e.clientX);
-    const dy = e.clientY - (window._rb_lastMouseY || e.clientY);
-    const speed = Math.hypot(dx, dy);
-    window._rb_lastMouseX = e.clientX;
-    window._rb_lastMouseY = e.clientY;
+World.add(engine.world,box);
 
-    const distX = e.clientX - boxScreenX;
-    const distY = e.clientY - boxScreenY;
-    const distToBox = Math.hypot(distX, distY);
+function keepBoxInside(){
 
-    const INTERACT_RADIUS = 180;
-    const SPEED_THRESHOLD = 8;
-    if (distToBox < INTERACT_RADIUS && speed > SPEED_THRESHOLD) {
-      const punchForce = 0.005 * Math.max(0.2, power / POWER_MAX);
-      Body.applyForce(box, box.position, { x: dx * punchForce, y: dy * punchForce });
-    }
-  }, { passive:false });
+const w=window.innerWidth;
+const h=window.innerHeight;
+const half=boxSize/2;
 
-  document.addEventListener('pointerup', (e) => {
-    if (holding && e.pointerId === holdPointerId) {
-      endHold(e.clientX, e.clientY, e.target);
-      e.preventDefault();
-    }
-  }, { passive:false });
+let x=box.position.x;
+let y=box.position.y;
 
-  document.addEventListener('pointercancel', (e) => {
-    if (holding && e.pointerId === holdPointerId) {
-      // cancel hold without throw
-      try { if (canvas.releasePointerCapture) canvas.releasePointerCapture(holdPointerId); } catch (err) {}
-      holding = false;
-      holdPointerId = null;
-      holdPointerType = null;
-      lastHoldPos = null;
-    }
-  }, { passive:false });
+if(x<half) x=half;
+if(x>w-half) x=w-half;
+if(y<half) y=half;
+if(y>h-half) y=h-half;
 
-  // double-tap toggles gravity (touch)
-  let lastTap = 0;
-  canvas.addEventListener('touchend', (e) => {
-    const now = Date.now();
-    const dt = now - lastTap;
-    if (dt < 300) {
-      const touch = e.changedTouches[0];
-      const rect = canvas.getBoundingClientRect();
-      const boxScreenX = box.position.x * (rect.width / canvas.width) + rect.left;
-      const boxScreenY = box.position.y * (rect.height / canvas.height) + rect.top;
-      const dx = touch.clientX - boxScreenX;
-      const dy = touch.clientY - boxScreenY;
-      if (Math.hypot(dx,dy) < boxSize / 1.2) toggleGravity();
-      lastTap = 0;
-      return;
-    }
-    lastTap = now;
-  });
+Body.setPosition(box,{x,y});
+Body.setVelocity(box,{x:0,y:0});
 
-  // right-click toggles gravity on PC
-  canvas.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    const rect = canvas.getBoundingClientRect();
-    const boxScreenX = box.position.x * (rect.width / canvas.width) + rect.left;
-    const boxScreenY = box.position.y * (rect.height / canvas.height) + rect.top;
-    const dx = e.clientX - boxScreenX;
-    const dy = e.clientY - boxScreenY;
-    if (Math.hypot(dx,dy) < boxSize / 1.2) toggleGravity();
-  });
+}
 
-  // wall collisions: small bounce so it doesn't stick
-  Events.on(engine, 'collisionStart', (event) => {
-    const pairs = event.pairs;
-    for (let i = 0; i < pairs.length; i++){
-      const p = pairs[i];
-      const a = p.bodyA, b = p.bodyB;
-      if ((a.label === 'box' && b.label === 'wall') || (b.label === 'box' && a.label === 'wall')) {
-        const vel = box.velocity;
-        const speed = Math.hypot(vel.x, vel.y);
-        if (speed < 0.5) {
-          Body.applyForce(box, box.position, { x:(Math.random()-0.5)*0.02, y:-0.02 });
-          continue;
-        }
-        const bounceMultiplier = isMobile ? 1.2 : 1.0;
-        const impulseScale = 0.0008 * bounceMultiplier;
-        Body.applyForce(box, box.position, { x:-vel.x * impulseScale, y:-vel.y * impulseScale });
-        const originalRest = box.restitution || 0.8;
-        box.restitution = Math.max(originalRest, 1.0 * bounceMultiplier);
-        setTimeout(()=> { box.restitution = originalRest; }, 220);
-      }
-    }
-  });
+window.addEventListener("resize",()=>{
 
-  // clamp velocity but allow sliding
-  Events.on(engine, 'beforeUpdate', () => {
-    const maxSpeed = 160;
-    let vx = box.velocity.x, vy = box.velocity.y;
-    if (vx > maxSpeed) vx = maxSpeed;
-    if (vx < -maxSpeed) vx = -maxSpeed;
-    if (vy > maxSpeed) vy = maxSpeed;
-    if (vy < -maxSpeed) vy = -maxSpeed;
-    Body.setVelocity(box, { x: vx, y: vy });
-  });
+resizeCanvas();
 
-  // runner/render
-  const runner = Runner.create();
-  function startGame(){
-    Runner.run(runner, engine);
-    Render.run(render);
-  }
+World.remove(engine.world,ground);
+World.remove(engine.world,ceiling);
+World.remove(engine.world,leftWall);
+World.remove(engine.world,rightWall);
 
-  // tilt only on mobile
-  async function startMotion(){
-    if (!isMobile) return;
-    if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function"){
-      try {
-        const permission = await DeviceMotionEvent.requestPermission();
-        if (permission !== "granted") return;
-      } catch {}
-    }
-    window.addEventListener('deviceorientation', (event) => {
-      const tiltX = event.gamma, tiltY = event.beta;
-      if (tiltX == null || tiltY == null) return;
-      if (gravityEnabled) { engine.gravity.x = tiltX / 30; engine.gravity.y = tiltY / 30; }
-    });
-  }
+createWalls();
+keepBoxInside();
 
-  // play button
-  playButton.addEventListener('click', async () => {
-    const el = document.documentElement;
-    try {
-      if (el.requestFullscreen) await el.requestFullscreen();
-      else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen();
-      else if (el.msRequestFullscreen) await el.msRequestFullscreen();
-    } catch {}
-    playButton.style.display = 'none';
-    startMotion();
-    startGame();
-  });
+});
 
-  </script>
+let gravityEnabled=true;
+
+function toggleGravity(){
+
+if(gravityEnabled){
+
+engine.gravity.y=1;
+debug.textContent="Gravity: ON";
+
+}else{
+
+engine.gravity.y=0;
+
+Body.applyForce(box,box.position,{
+x:(Math.random()-0.5)*0.002,
+y:-0.01
+});
+
+debug.textContent="Gravity: OFF";
+
+}
+
+}
+
+let lastTap=0;
+
+canvas.addEventListener("touchend",(e)=>{
+
+const now=Date.now();
+const dt=now-lastTap;
+
+if(dt<300){
+
+const touch=e.changedTouches[0];
+
+const dx=touch.clientX-box.position.x;
+const dy=touch.clientY-box.position.y;
+
+const dist=Math.sqrt(dx*dx+dy*dy);
+
+if(dist<boxSize/1.2){
+
+gravityEnabled=!gravityEnabled;
+toggleGravity();
+
+}
+
+lastTap=0;
+return;
+
+}
+
+lastTap=now;
+
+});
+
+canvas.addEventListener("contextmenu",(e)=>{
+
+e.preventDefault();
+
+const dx=e.clientX-box.position.x;
+const dy=e.clientY-box.position.y;
+
+const dist=Math.sqrt(dx*dx+dy*dy);
+
+if(dist<boxSize/1.2){
+
+gravityEnabled=!gravityEnabled;
+toggleGravity();
+
+}
+
+});
+
+const mouse=Mouse.create(canvas);
+
+const mouseConstraint=MouseConstraint.create(engine,{
+mouse:mouse,
+constraint:{
+stiffness:0.2,
+render:{visible:false}
+}
+});
+
+World.add(engine.world,mouseConstraint);
+
+let lastMousePos={x:0,y:0};
+let interactive=false;
+
+const INTERACT_RADIUS=180;
+const EXIT_RADIUS=220;
+const SPEED_THRESHOLD=8;
+const PUNCH_FORCE=0.005;
+
+canvas.addEventListener("mousemove",(e)=>{
+
+const mousePos={x:e.clientX,y:e.clientY};
+
+const dx=mousePos.x-lastMousePos.x;
+const dy=mousePos.y-lastMousePos.y;
+
+const speed=Math.sqrt(dx*dx+dy*dy);
+
+lastMousePos=mousePos;
+
+const distX=mousePos.x-box.position.x;
+const distY=mousePos.y-box.position.y;
+
+const dist=Math.sqrt(distX*distX+distY*distY);
+
+if(!interactive && dist<INTERACT_RADIUS){
+
+interactive=true;
+debug.textContent="Near block: drag it or smack it";
+
+}
+
+else if(interactive && dist>EXIT_RADIUS){
+
+interactive=false;
+debug.textContent="Reality Breaker ON";
+
+}
+
+if(dist<INTERACT_RADIUS && speed>SPEED_THRESHOLD){
+
+Body.applyForce(box,box.position,{
+x:dx*PUNCH_FORCE,
+y:dy*PUNCH_FORCE
+});
+
+}
+
+});
+
+Events.on(engine,"beforeUpdate",()=>{
+
+const maxSpeed=50;
+
+let vx=box.velocity.x;
+let vy=box.velocity.y;
+
+if(vx>maxSpeed) vx=maxSpeed;
+if(vx<-maxSpeed) vx=-maxSpeed;
+if(vy>maxSpeed) vy=maxSpeed;
+if(vy<-maxSpeed) vy=-maxSpeed;
+
+Body.setVelocity(box,{x:vx,y:vy});
+
+});
+
+function enableTiltControls(){
+
+function handleTilt(event){
+
+let tiltLR=event.gamma;
+let tiltFB=event.beta;
+
+if(tiltLR==null || tiltFB==null) return;
+
+const FORCE=0.0006;
+
+Body.applyForce(box,box.position,{
+x:tiltLR*FORCE,
+y:tiltFB*FORCE
+});
+
+}
+
+if(typeof DeviceOrientationEvent!=="undefined" &&
+typeof DeviceOrientationEvent.requestPermission==="function"){
+
+DeviceOrientationEvent.requestPermission().then(response=>{
+
+if(response==="granted"){
+window.addEventListener("deviceorientation",handleTilt);
+}
+
+});
+
+}else{
+
+window.addEventListener("deviceorientation",handleTilt);
+
+}
+
+}
+
+const runner=Runner.create();
+
+function startGame(){
+
+Runner.run(runner,engine);
+Render.run(render);
+
+}
+
+</script>
 </body>
 </html>
