@@ -17,17 +17,6 @@ top:0;
 left:0;
 }
 
-#debug{
-position:fixed;
-bottom:20px;
-left:20px;
-color:white;
-font-family:Arial,sans-serif;
-font-size:18px;
-text-shadow:0 0 5px black;
-pointer-events:none;
-}
-
 #playButton{
 position:fixed;
 top:50%;
@@ -51,7 +40,6 @@ user-select:none;
 <div id="playButton">▶ Play</div>
 
 <canvas id="world"></canvas>
-<div id="debug">Reality Breaker ON</div>
 
 <script src="https://unpkg.com/matter-js@0.20.0/build/matter.min.js"></script>
 
@@ -93,7 +81,6 @@ Events
 }=Matter;
 
 const canvas=document.getElementById("world");
-const debug=document.getElementById("debug");
 
 function resizeCanvas(){
 canvas.width=window.innerWidth;
@@ -188,7 +175,6 @@ function toggleGravity(){
 if(gravityEnabled){
 
 engine.gravity.y=1;
-debug.textContent="Gravity: ON";
 
 }else{
 
@@ -198,8 +184,6 @@ Body.applyForce(box,box.position,{
 x:(Math.random()-0.5)*0.002,
 y:-0.01
 });
-
-debug.textContent="Gravity: OFF";
 
 }
 
@@ -268,10 +252,8 @@ render:{visible:false}
 World.add(engine.world,mouseConstraint);
 
 let lastMousePos={x:0,y:0};
-let interactive=false;
 
 const INTERACT_RADIUS=180;
-const EXIT_RADIUS=220;
 const SPEED_THRESHOLD=8;
 const PUNCH_FORCE=0.005;
 
@@ -290,20 +272,6 @@ const distX=mousePos.x-box.position.x;
 const distY=mousePos.y-box.position.y;
 
 const dist=Math.sqrt(distX*distX+distY*distY);
-
-if(!interactive && dist<INTERACT_RADIUS){
-
-interactive=true;
-debug.textContent="Near block: drag it or smack it";
-
-}
-
-else if(interactive && dist>EXIT_RADIUS){
-
-interactive=false;
-debug.textContent="Reality Breaker ON";
-
-}
 
 if(dist<INTERACT_RADIUS && speed>SPEED_THRESHOLD){
 
@@ -379,5 +347,6 @@ Render.run(render);
 }
 
 </script>
+
 </body>
 </html>
